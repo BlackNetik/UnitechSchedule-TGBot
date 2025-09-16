@@ -12,11 +12,13 @@ import locale
 import json
 import os
 import re
+import calendar
+
 from get_student_id import get_schedule
 
 # Константы для версии и даты обновления
-BOT_VERSION = "1.23"
-LAST_UPDATED = "11.09.2025"
+BOT_VERSION = "1.31"
+LAST_UPDATED = "16.09.2025"
 
 # Состояния для ConversationHandler
 FEEDBACK_WAITING = 1
@@ -152,28 +154,35 @@ class ScheduleFormatter:
             summary_lower = summary.lower()
             if 'зач' in summary_lower.split()[0]:
                 emoji = '✏️'
+                category = 'Зачет'
                 summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
             elif 'физ' in summary_lower or 'элективные курсы по физической культуре' in summary_lower:
                 emoji = '💪'
+                category = 'Физкультура'
                 summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'лек' in summary_lower.split()[0]:
+            elif 'лек' in summary_lower.split()[0] or 'лек.' in summary_lower.split()[0]:
                 emoji = '📚'
+                category = 'Лекция'
                 summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'пр.' in summary_lower.split()[0] or 'прак' in summary_lower.split()[0]:
+            elif 'пр' in summary_lower.split()[0] or 'пр.' in summary_lower.split()[0] or 'прак' in summary_lower.split()[0]:
                 emoji = '💻'
+                category = 'Практика'
                 summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
             elif 'лаб' in summary_lower.split()[0]:
                 emoji = '❗'
+                category = 'Лабораторная'
                 summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
             else:
                 emoji = '🔔'
+                category = 'Прочее'
             
+            summary = f"{summary} ({category})"
             pair_number = ScheduleFormatter.get_pair_number(start_time)
             time_prefix = f"{pair_number} пара: " if pair_number else ""
             return f" 🕘 {time_prefix}{start_time_str}-{end_time_str}\n{emoji} {summary}\nАудитория: {location}\n{description}\n"
         except Exception as e:
             logger.error("failed to format event: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-            return f"🔔 Error formatting event: {event['summary']}\n"
+            return f"🔔 Error formatting event: {event['summary']} ({category})\n"
 
     @staticmethod
     def format_daily_schedule(events, date):
@@ -259,6 +268,18 @@ def get_next_week_schedule(events):
     end_date = start_date + timedelta(days=6)
     return ScheduleFormatter.format_week_schedule(events, start_date, end_date)
 
+def get_day_schedule(events, day):
+    today = datetime.now(MSK)
+    year, month = today.year, today.month
+    _, max_days = calendar.monthrange(year, month)
+    if not (1 <= day <= max_days):
+        return f"Ошибка: день {day} недопустим. Укажите день от 1 до {max_days}."
+    try:
+        target_date = datetime(year, month, day).date()
+        return ScheduleFormatter.format_daily_schedule(events, target_date)
+    except ValueError:
+        return f"Ошибка: день {day} недопустим для текущего месяца."
+
 def start_keyboard():
     return ReplyKeyboardMarkup(
         [
@@ -266,6 +287,7 @@ def start_keyboard():
             [KeyboardButton("Расп. на завтра")],
             [KeyboardButton("Расп. на неделю")],
             [KeyboardButton("Расп. на след. неделю")],
+            [KeyboardButton("Расп. на день")],
         ],
         resize_keyboard=True
     )
@@ -278,9 +300,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_users(users_data)
     reply_markup = start_keyboard() if update.effective_chat.type == 'private' else None
     await update.message.reply_text(
-        'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий ТУ им. А.А. Леонова с портала es.unitech-mo!\n'
+        'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий МТУСИ с портала Unitech!\n'
         'По умолчанию показываю расписание для группы ПИ-23. Хочешь другую? Используй /change <название группы> (например, /change ПИ-23).\n'
-        '\nВыбирай опции через кнопки (в личных сообщениях) или команды: /today, /tomorrow, /week, /next_week, /info, /report, /change, /change_info, /feedback.',
+        'Выбирай опции через кнопки (в личных сообщениях) или команды: /today, /tomorrow, /week, /next_week, /day, /info, /report, /change, /change_info, /feedback.',
         reply_markup=reply_markup
     )
     logger.info("sent start menu", extra={
@@ -349,7 +371,10 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/tomorrow — расписание на завтра\n"
         f"/week — расписание на неделю\n"
         f"/next_week — расписание на следующую неделю\n"
+        f"/day <номер_дня> — расписание на указанный день текущего месяца\n"
         f"/change — смена группы\n"
+        f"/change_info — как узнать название группы\n"
+        f"/report — отправить жалобу или предложение\n"
         f"/feedback — отправить обратную связь разработчику"
     )
     logger.info("sent info", extra={
@@ -545,6 +570,50 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
+async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    users_data = load_users()
+    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Использование: /day <номер_дня> (например, /day 17)")
+        logger.info("invalid /day command: no or multiple arguments provided", extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        return
+    
+    try:
+        day = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Ошибка: номер дня должен быть числом (например, /day 17)")
+        logger.info("invalid /day command: non-numeric day provided", extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        return
+    
+    try:
+        id_student = users_data[user_chat_key]["id_student"]
+        ics_content = download_ics(id_student)
+        events = parse_ics(ics_content)
+        schedule = get_day_schedule(events, day)
+        await update.message.reply_text(f"Расписание на {day} {datetime.now(MSK).strftime('%B')}:\n{schedule}")
+        logger.info("sent schedule for day %s", day, extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка при загрузке расписания: {str(e)}")
+        logger.error("failed to load schedule for day %s: %s", day, str(e), extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if update.effective_chat.type in ['group', 'supergroup']:
@@ -553,7 +622,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         text = text.replace(bot_username, '').strip()
     
-    if text in ["Расп. на сегодня", "Расписание на сегодня"]  or text == "Расписание":
+    if text in ["Расп. на сегодня", "Расписание на сегодня"]:
         await today_command(update, context)
     elif text in ["Расп. на завтра", "Расписание на завтра"]:
         await tomorrow_command(update, context)
@@ -561,8 +630,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await week_command(update, context)
     elif text in ["Расп. на след. неделю", "Расписание на следующую неделю"]:
         await next_week_command(update, context)
+    elif text.startswith("Расп. на день ") or text.startswith("Расписание на день "):
+        try:
+            day = int(text.split()[-1])
+            context.args = [str(day)]
+            await day_command(update, context)
+        except ValueError:
+            await update.message.reply_text("Ошибка: номер дня должен быть числом (например, Расп. на день 17)")
+            logger.info("invalid text day command: non-numeric day provided", extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
     else:
-        await update.message.reply_text("Я вас не понимаю... Пожалуйста, используйте кнопки (в личных сообщениях) или команды /today, /tomorrow, /week, /next_week, /info, /report, /change, /change_info, /feedback.")
+        await update.message.reply_text("Пожалуйста, используйте кнопки (в личных сообщениях) или команды /today, /tomorrow, /week, /next_week, /day, /info, /report, /change, /change_info, /feedback.")
         logger.info("received invalid text: %s", text, extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
@@ -602,6 +683,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("tomorrow", tomorrow_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("next_week", next_week_command))
+    app.add_handler(CommandHandler("day", day_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.LOCATION, location_handler))
     app.add_error_handler(error_handler)
