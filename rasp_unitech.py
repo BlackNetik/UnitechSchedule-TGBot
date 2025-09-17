@@ -17,8 +17,8 @@ import calendar
 from get_student_id import get_schedule
 
 # Константы для версии и даты обновления
-BOT_VERSION = "1.31"
-LAST_UPDATED = "16.09.2025"
+BOT_VERSION = "1.33"
+LAST_UPDATED = "17.09.2025"
 
 # Состояния для ConversationHandler
 FEEDBACK_WAITING = 1
@@ -201,16 +201,22 @@ class ScheduleFormatter:
         if not events:
             return "Расписания на неделю нет."
         sorted_events = sorted(events, key=lambda e: e['dtstart'])
-        current_date = None
+        current_date = start_date
         schedule = []
-        for event in sorted_events:
-            event_date = event['dtstart'].astimezone(MSK).date()
-            if event_date != current_date:
-                current_date = event_date
-                day = str(current_date.day)
-                formatted_date = f"{day} {current_date.strftime('%B (%A)')}"
-                schedule.append(f"<----------!---------->\n📅 {formatted_date}")
-            schedule.append(ScheduleFormatter.format_event(event))
+        while current_date <= end_date:
+            day_events = [event for event in sorted_events if event['dtstart'].astimezone(MSK).date() == current_date]
+            # Пропускаем субботу и воскресенье, если нет событий
+            if current_date.weekday() >= 5 and not day_events:
+                current_date += timedelta(days=1)
+                continue
+            day = str(current_date.day)
+            formatted_date = f"{day} {current_date.strftime('%B (%A)')}"
+            schedule.append(f"<----------!---------->\n📅 {formatted_date}")
+            if day_events:
+                schedule.append("\n".join(ScheduleFormatter.format_event(event) for event in day_events))
+            elif current_date.weekday() < 5:  # Будние дни (0-4: пн-пт)
+                schedule.append(f"{formatted_date} занятий нет 0_о")
+            current_date += timedelta(days=1)
         return "\n".join(schedule)
 
 def download_ics(id_student):
@@ -265,7 +271,7 @@ def get_next_week_schedule(events):
     today = datetime.now(MSK).date()
     days_until_monday = (7 - today.weekday()) % 7 or 7
     start_date = today + timedelta(days=days_until_monday)
-    end_date = start_date + timedelta(days=6)
+    end_date = start_date + timedelta(days=6)  # Воскресенье следующей недели
     return ScheduleFormatter.format_week_schedule(events, start_date, end_date)
 
 def get_day_schedule(events, day):
@@ -273,7 +279,7 @@ def get_day_schedule(events, day):
     year, month = today.year, today.month
     _, max_days = calendar.monthrange(year, month)
     if not (1 <= day <= max_days):
-        return f"Ошибка: день {day} недопустим. Укажите день от 1 до {max_days}."
+        return f"Ошибка: день {day} недопустим. Укажите день от 1 до {max_days} (в {today.strftime('%B')} {max_days} дней)."
     try:
         target_date = datetime(year, month, day).date()
         return ScheduleFormatter.format_daily_schedule(events, target_date)
@@ -293,16 +299,16 @@ def start_keyboard():
     )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    if user_chat_key not in users_data:
-        users_data[user_chat_key] = {'id_student': 90893}
+    if chat_key not in users_data:
+        users_data[chat_key] = {'id_student': 90893}
         save_users(users_data)
     reply_markup = start_keyboard() if update.effective_chat.type == 'private' else None
     await update.message.reply_text(
         'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий МТУСИ с портала Unitech!\n'
         'По умолчанию показываю расписание для группы ПИ-23. Хочешь другую? Используй /change <название группы> (например, /change ПИ-23).\n'
-        'Выбирай опции через кнопки (в личных сообщениях) или команды: /today, /tomorrow, /week, /next_week, /day, /info, /report, /change, /change_info, /feedback.',
+        'Выбирай опции через кнопки (в личных сообщениях) или команды: /today, /tomorrow, /week, /next_week, /day, /info, /feedback.',
         reply_markup=reply_markup
     )
     logger.info("sent start menu", extra={
@@ -312,7 +318,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
     if len(context.args) < 1:
         await update.message.reply_text("Использование: /change <название группы> (например, /change ПИ-23)")
@@ -334,27 +340,12 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
     
-    users_data[user_chat_key] = users_data.get(user_chat_key, {})
-    users_data[user_chat_key]["id_student"] = student_id
-    users_data[user_chat_key]["group_name"] = group_name
+    users_data[chat_key] = users_data.get(chat_key, {})
+    users_data[chat_key]["id_student"] = student_id
+    users_data[chat_key]["group_name"] = group_name
     save_users(users_data)
     await update.message.reply_text(f"Группа изменена на {group_name} (ID студента: {student_id})")
     logger.info("changed group to %s (student ID: %s)", group_name, student_id, extra={
-        'user_id': update.effective_user.id,
-        'chat_id': update.effective_chat.id,
-        'username': update.effective_user.username or 'unknown'
-    })
-
-async def change_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📍 Как узнать название группы для команды /change:\n\n"
-        "🔹 Зайдите на портал: https://es.unitech-mo.ru/\n"
-        "🔹 Перейдите в раздел «Справочник» → «Группы».\n"
-        "🔹 Найдите свою группу в списке (например, ПИ-23).\n"
-        "🔹 Используйте команду: /change ПИ-23\n\n"
-        "Готово! Теперь вы можете смотреть расписание своей группы. 🎉"
-    )
-    logger.info("sent change info", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
@@ -373,26 +364,9 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/next_week — расписание на следующую неделю\n"
         f"/day <номер_дня> — расписание на указанный день текущего месяца\n"
         f"/change — смена группы\n"
-        f"/change_info — как узнать название группы\n"
-        f"/report — отправить жалобу или предложение\n"
         f"/feedback — отправить обратную связь разработчику"
     )
     logger.info("sent info", extra={
-        'user_id': update.effective_user.id,
-        'chat_id': update.effective_chat.id,
-        'username': update.effective_user.username or 'unknown'
-    })
-
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Пожалуйста, отправьте вашу локацию 🤗",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("Отправить локацию", request_location=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
-    )
-    logger.info("requested location", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
@@ -452,38 +426,12 @@ async def feedback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
     return ConversationHandler.END
 
-async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    location = update.message.location
-    reply_markup = start_keyboard() if update.effective_chat.type == 'private' else None
-    if location:
-        latitude = location.latitude
-        longitude = location.longitude
-        await update.message.reply_text(
-            f"Ваша геолокация получена: широта {latitude}, долгота {longitude}.\nВ течении пяти минут к вам приедет СПЕЦНАЗ и проведёт воспитательную беседу! Просьба не сопротивляться и открыть дверь при первом стуке!\nТакже мы прямо сейчас вам устанавливаем национальный мессенджер MAX\n\n\nMAX — новая цифровая платформа, которая объединяет в себе сервисы для решения повседневных задач и мессенджер для комфортного общения. Это быстрое и легкое приложение, где можно переписываться, звонить, отправлять стикеры, голосовые сообщения и пользоваться разными полезными сервисами. \nMAX работает стабильно даже при слабом интернет-соединении, чтобы вы всегда оставались на связи.",
-            reply_markup=reply_markup
-        )
-        logger.info("received location (lat: %s, lon: %s)", latitude, longitude, extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-    else:
-        await update.message.reply_text(
-            "Не удалось получить локацию. Пожалуйста, попробуйте снова.",
-            reply_markup=reply_markup
-        )
-        logger.info("failed to receive location", extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    users_data.setdefault(chat_key, {'id_student': 90893})
     try:
-        id_student = users_data[user_chat_key]["id_student"]
+        id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule = get_today_schedule(events)
@@ -502,11 +450,11 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    users_data.setdefault(chat_key, {'id_student': 90893})
     try:
-        id_student = users_data[user_chat_key]["id_student"]
+        id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule = get_tomorrow_schedule(events)
@@ -525,11 +473,11 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    users_data.setdefault(chat_key, {'id_student': 90893})
     try:
-        id_student = users_data[user_chat_key]["id_student"]
+        id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule = get_week_schedule(events)
@@ -548,11 +496,11 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    users_data.setdefault(chat_key, {'id_student': 90893})
     try:
-        id_student = users_data[user_chat_key]["id_student"]
+        id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule = get_next_week_schedule(events)
@@ -571,9 +519,9 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_key = f"{update.effective_user.id}_{update.effective_chat.id}"
+    chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    users_data.setdefault(user_chat_key, {'id_student': 90893})
+    users_data.setdefault(chat_key, {'id_student': 90893})
     
     if len(context.args) != 1:
         await update.message.reply_text("Использование: /day <номер_дня> (например, /day 17)")
@@ -596,7 +544,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        id_student = users_data[user_chat_key]["id_student"]
+        id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule = get_day_schedule(events, day)
@@ -643,7 +591,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
     else:
-        await update.message.reply_text("Пожалуйста, используйте кнопки (в личных сообщениях) или команды /today, /tomorrow, /week, /next_week, /day, /info, /report, /change, /change_info, /feedback.")
+        await update.message.reply_text("Пожалуйста, используйте кнопки (в личных сообщениях) или команды /today, /tomorrow, /week, /next_week, /day, /info, /feedback.")
         logger.info("received invalid text: %s", text, extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
@@ -669,9 +617,7 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("change", change_command))
-    app.add_handler(CommandHandler("change_info", change_info))
     app.add_handler(CommandHandler("info", info))
-    app.add_handler(CommandHandler("report", report))
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("feedback", feedback_start)],
         states={
@@ -685,6 +631,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("next_week", next_week_command))
     app.add_handler(CommandHandler("day", day_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
     app.add_error_handler(error_handler)
     app.run_polling(timeout=20, drop_pending_updates=True)
