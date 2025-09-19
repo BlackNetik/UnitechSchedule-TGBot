@@ -13,10 +13,11 @@ import json
 import os
 import re
 import calendar
+import traceback
 from get_student_id import get_schedule
 
 # Константы для версии и даты обновления
-BOT_VERSION = "1.4"
+BOT_VERSION = "1.41"
 LAST_UPDATED = "19.09.2025"
 
 # Состояния для ConversationHandler
@@ -226,6 +227,14 @@ def download_ics(id_student):
         if not response.content:
             raise Exception("Empty response from server")
         return response.content
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 504:
+            logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+            raise Exception("504 Server Error: Gateway Time-out")
+        raise Exception(f"Failed to download ICS file: {str(e)}")
+    except requests.exceptions.ReadTimeout as e:
+        logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+        raise Exception("Read timeout error: Failed to connect to server")
     except requests.exceptions.RequestException as e:
         logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception(f"Failed to download ICS file: {str(e)}")
@@ -360,12 +369,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_key not in users_data:
         users_data[chat_key] = {'id_student': 90893}
         save_users(users_data)
-    reply_markup = get_menu_keyboard() if update.effective_chat.type == 'private' else None
     await update.message.reply_text(
         'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий Технологического Университета им. А.А. Леонова с портала Unitech!\n'
         'По умолчанию показываю расписание для группы ПИ-23. Хочешь другую? Используй /change <название группы> (например, /change ПИ-23).\n'
-        'Выбирай опции через кнопки (в личных сообщениях) или команды: /today, /tomorrow, /week, /next_week, /day, /info, /feedback.',
-        reply_markup=reply_markup
+        'Выбирай опции через кнопки или команды: /today, /tomorrow, /week, /next_week, /day, /info, /feedback.',
+        reply_markup=get_menu_keyboard()
     )
     logger.info("sent start menu", extra={
         'user_id': update.effective_user.id,
@@ -374,7 +382,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_markup = get_menu_keyboard() if update.effective_chat.type == 'private' else None
     await update.message.reply_text(
         f"Этот бот предоставляет расписание занятий на основе данных с портала Unitech.\n"
         f"Бот был написан сотрудником МОРС с помощью AI Grok\n"
@@ -388,7 +395,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/day <номер_дня> — расписание на указанный день текущего месяца\n"
         f"/change — смена группы\n"
         f"/feedback — отправить обратную связь разработчику",
-        reply_markup=reply_markup
+        reply_markup=get_menu_keyboard()
     )
     logger.info("sent info", extra={
         'user_id': update.effective_user.id,
@@ -411,17 +418,32 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     group_name = ' '.join(context.args)
-    student_id = get_schedule(group_name)
-    if not student_id:
-        await update.message.reply_text(
-            f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
-        )
-        logger.info("failed to find group or student for group: %s", group_name, extra={
+    try:
+        student_id = get_schedule(group_name)
+        if not student_id:
+            await update.message.reply_text(
+                f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
+                reply_markup=get_menu_keyboard()
+            )
+            logger.info("failed to find group or student for group: %s", group_name, extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return
+    except Exception as e:
+        error_message = "Произошла ошибка при поиске группы. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        logger.info("failed to find group or student for group %s: %s", group_name, str(e), extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
+        await update.message.reply_text(
+            error_message,
+            reply_markup=get_menu_keyboard()
+        )
         return
     
     users_data[chat_key] = users_data.get(chat_key, {})
@@ -430,7 +452,7 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_users(users_data)
     await update.message.reply_text(
         f"Группа изменена на {group_name} (ID студента: {student_id})",
-        reply_markup=get_schedule_keyboard(show_menu_button=True)
+        reply_markup=get_menu_keyboard()
     )
     logger.info("changed group to %s (student ID: %s)", group_name, student_id, extra={
         'user_id': update.effective_user.id,
@@ -439,9 +461,33 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Пожалуйста, отправьте ваше сообщение для обратной связи."
-    )
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            if update.callback_query.message:
+                await update.callback_query.message.delete()
+        except Exception as e:
+            logger.warning("failed to delete message in feedback_start: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+    
+    try:
+        await (update.message or update.callback_query.message).reply_text(
+            "Пожалуйста, отправьте ваше сообщение для обратной связи."
+        )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Пожалуйста, отправьте ваше сообщение для обратной связи."
+        )
+        logger.warning("failed to send feedback prompt: %s", str(e), extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+    
     logger.info("requested feedback message", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
@@ -450,11 +496,10 @@ async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return FEEDBACK_WAITING
 
 async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Check if the message is text and not empty
     if not update.message or not update.message.text or update.message.text.strip() == "":
         await update.message.reply_text(
             "Пожалуйста, отправьте текстовое сообщение (не пустое).",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            reply_markup=get_menu_keyboard()
         )
         logger.info("received invalid feedback: non-text or empty", extra={
             'user_id': update.effective_user.id,
@@ -474,7 +519,7 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id='-4956911463', text=feedback_message)
         await update.message.reply_text(
             "Ваше сообщение отправлено разработчику, спасибо!",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            reply_markup=get_menu_keyboard()
         )
         logger.info("sent feedback: %s", feedback_text, extra={
             'user_id': update.effective_user.id,
@@ -483,9 +528,12 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return ConversationHandler.END
     except Exception as e:
+        error_message = "Произошла ошибка при отправке обратной связи. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Telegram временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
         await update.message.reply_text(
-            f"Ошибка при отправке обратной связи: {str(e)}",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            error_message,
+            reply_markup=get_menu_keyboard()
         )
         logger.error("failed to send feedback: %s", str(e), extra={
             'user_id': update.effective_user.id,
@@ -495,10 +543,9 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def feedback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_markup = get_menu_keyboard() if update.effective_chat.type == 'private' else None
     await update.message.reply_text(
         "Отправка обратной связи отменена.",
-        reply_markup=reply_markup
+        reply_markup=get_menu_keyboard()
     )
     logger.info("cancelled feedback", extra={
         'user_id': update.effective_user.id,
@@ -516,16 +563,23 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule, _ = get_today_schedule(events)
-        reply_markup = get_schedule_keyboard(exclude="today") if update.effective_chat.type == 'private' else None
-        await update.message.reply_text(f"Расписание на сегодня:\n{schedule}", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"Расписание на сегодня:\n{schedule}",
+            reply_markup=get_schedule_keyboard(exclude="today")
+        )
         logger.info("sent today's schedule", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to load today's schedule: %s", str(e), extra={
@@ -543,16 +597,23 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule, _ = get_tomorrow_schedule(events)
-        reply_markup = get_schedule_keyboard(exclude="tomorrow") if update.effective_chat.type == 'private' else None
-        await update.message.reply_text(f"Расписание на завтра:\n{schedule}", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"Расписание на завтра:\n{schedule}",
+            reply_markup=get_schedule_keyboard(exclude="tomorrow")
+        )
         logger.info("sent tomorrow's schedule", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to load tomorrow's schedule: %s", str(e), extra={
@@ -570,16 +631,23 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule, _ = get_week_schedule(events)
-        reply_markup = get_schedule_keyboard(exclude="week") if update.effective_chat.type == 'private' else None
-        await update.message.reply_text(f"Расписание на неделю:\n{schedule}", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"Расписание на неделю:\n{schedule}",
+            reply_markup=get_schedule_keyboard(exclude="week")
+        )
         logger.info("sent week's schedule", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to load week's schedule: %s", str(e), extra={
@@ -597,16 +665,23 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule, _ = get_next_week_schedule(events)
-        reply_markup = get_schedule_keyboard(exclude="next_week") if update.effective_chat.type == 'private' else None
-        await update.message.reply_text(f"Расписание на следующую неделю:\n{schedule}", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"Расписание на следующую неделю:\n{schedule}",
+            reply_markup=get_schedule_keyboard(exclude="next_week")
+        )
         logger.info("sent next week's schedule", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to load next week's schedule: %s", str(e), extra={
@@ -623,38 +698,37 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text(
             "Использование: /day <номер_дня> (например, /day 17)",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            reply_markup=get_day_selection_keyboard(page=0)
         )
         logger.info("invalid /day command: no or multiple arguments provided", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-        return
+        return DAY_SELECTION
     
     try:
         day = int(context.args[0])
     except ValueError:
         await update.message.reply_text(
             "Ошибка: номер дня должен быть числом (например, /day 17)",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            reply_markup=get_day_selection_keyboard(page=0)
         )
         logger.info("invalid /day command: non-numeric day provided", extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-        return
+        return DAY_SELECTION
     
     try:
         id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
         events = parse_ics(ics_content)
         schedule, target_date = get_day_schedule(events, day)
-        reply_markup = get_schedule_keyboard(exclude="day") if update.effective_chat.type == 'private' else None
         await update.message.reply_text(
             f"Расписание на {day} {datetime.now(MSK).strftime('%B')}:\n{schedule}",
-            reply_markup=reply_markup
+            reply_markup=get_schedule_keyboard(exclude="day")
         )
         logger.info("sent schedule for day %s", day, extra={
             'user_id': update.effective_user.id,
@@ -662,8 +736,13 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to load schedule for day %s: %s", day, str(e), extra={
@@ -673,10 +752,35 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def day_selection_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Выберите день для просмотра расписания:",
-        reply_markup=get_day_selection_keyboard(page=0)
-    )
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            if update.callback_query.message:
+                await update.callback_query.message.delete()
+        except Exception as e:
+            logger.warning("failed to delete message in day_selection_start: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+    
+    try:
+        await (update.message or update.callback_query.message).reply_text(
+            "Выберите день для просмотра расписания:",
+            reply_markup=get_day_selection_keyboard(page=0)
+        )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Выберите день для просмотра расписания:",
+            reply_markup=get_day_selection_keyboard(page=0)
+        )
+        logger.warning("failed to send day selection prompt: %s", str(e), extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+    
     logger.info("started day selection", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
@@ -692,20 +796,45 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     username = update.effective_user.username or 'unknown'
     
-    # Try to delete the previous message, but continue if it fails
     try:
-        await query.message.delete()
-        logger.info("deleted previous message", extra={
-            'user_id': user_id,
-            'chat_id': chat_id,
-            'username': username
-        })
+        if query.message:
+            await query.message.delete()
+            logger.info("deleted previous message", extra={
+                'user_id': user_id,
+                'chat_id': chat_id,
+                'username': username
+            })
     except Exception as e:
         logger.warning("failed to delete message in day_selection: %s", str(e), extra={
             'user_id': user_id,
             'chat_id': chat_id,
             'username': username
         })
+
+    async def send_message(text, reply_markup=None):
+        """Helper function to send message to the chat."""
+        try:
+            if query.message:
+                await query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+                logger.warning("query.message is None, sent message via context.bot", extra={
+                    'user_id': user_id,
+                    'chat_id': chat_id,
+                    'username': username
+                })
+        except Exception as e:
+            logger.error("failed to send message in day_selection: %s", str(e), extra={
+                'user_id': user_id,
+                'chat_id': chat_id,
+                'username': username
+            })
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте еще раз.",
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
+            raise e
     
     logger.info("processing callback: %s", query.data, extra={
         'user_id': user_id,
@@ -713,10 +842,9 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'username': username
     })
     
-    # Handle menu button
     if query.data == "menu":
         try:
-            await query.message.reply_text(
+            await send_message(
                 f"Этот бот предоставляет расписание занятий на основе данных с портала Unitech.\n"
                 f"Бот был написан сотрудником МОРС с помощью AI Grok\n"
                 f"Расписание доступно для всех групп, используйте /change <название группы> для смены.\n"
@@ -738,8 +866,8 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             return ConversationHandler.END
         except Exception as e:
-            await query.message.reply_text(
-                f"Ошибка при возврате в меню: {str(e)}",
+            await send_message(
+                f"Произошла ошибка при возврате в меню. Пожалуйста, попробуйте еще раз.",
                 reply_markup=get_schedule_keyboard(show_menu_button=True)
             )
             logger.error("failed to return to menu: %s", str(e), extra={
@@ -749,7 +877,6 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             return ConversationHandler.END
     
-    # Handle pagination
     if query.data.startswith("day_page_"):
         try:
             page = int(query.data.split("_")[-1])
@@ -758,7 +885,7 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': chat_id,
                 'username': username
             })
-            await query.message.reply_text(
+            await send_message(
                 "Выберите день для просмотра расписания:",
                 reply_markup=get_day_selection_keyboard(page=page)
             )
@@ -769,24 +896,28 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': chat_id,
                 'username': username
             })
-            await query.message.reply_text(
+            await send_message(
                 "Ошибка: неверный номер страницы.",
                 reply_markup=get_schedule_keyboard(show_menu_button=True)
             )
             return ConversationHandler.END
         except Exception as e:
+            error_message = "Произошла ошибка при смене страницы. Пожалуйста, попробуйте еще раз."
+            if "504" in str(e):
+                error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+            elif "Read timeout" in str(e):
+                error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+            await send_message(
+                error_message,
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
             logger.error("failed to switch to page: %s", str(e), extra={
                 'user_id': user_id,
                 'chat_id': chat_id,
                 'username': username
             })
-            await query.message.reply_text(
-                f"Ошибка при смене страницы: {str(e)}",
-                reply_markup=get_schedule_keyboard(show_menu_button=True)
-            )
             return ConversationHandler.END
     
-    # Handle day selection
     if query.data.startswith("day_select_"):
         try:
             day = int(query.data.split("_")[-1])
@@ -805,18 +936,23 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 events = parse_ics(ics_content)
                 schedule, target_date = get_day_schedule(events, day)
             except Exception as e:
+                error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+                if "504" in str(e):
+                    error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+                elif "Read timeout" in str(e):
+                    error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
                 logger.error("failed to fetch schedule for day %s: %s", day, str(e), extra={
                     'user_id': user_id,
                     'chat_id': chat_id,
                     'username': username
                 })
-                await query.message.reply_text(
-                    f"Ошибка при загрузке расписания: {str(e)}",
+                await send_message(
+                    error_message,
                     reply_markup=get_schedule_keyboard(show_menu_button=True)
                 )
                 return ConversationHandler.END
             
-            await query.message.reply_text(
+            await send_message(
                 f"Расписание на {day} {datetime.now(MSK).strftime('%B')}:\n{schedule}",
                 reply_markup=get_schedule_keyboard(exclude="day")
             )
@@ -832,30 +968,34 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': chat_id,
                 'username': username
             })
-            await query.message.reply_text(
+            await send_message(
                 "Ошибка: неверный номер дня.",
                 reply_markup=get_schedule_keyboard(show_menu_button=True)
             )
             return ConversationHandler.END
         except Exception as e:
+            error_message = "Произошла ошибка при обработке выбора дня. Пожалуйста, попробуйте еще раз."
+            if "504" in str(e):
+                error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+            elif "Read timeout" in str(e):
+                error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+            await send_message(
+                error_message,
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
             logger.error("failed to process day selection for day %s: %s", day, str(e), extra={
                 'user_id': user_id,
                 'chat_id': chat_id,
                 'username': username
             })
-            await query.message.reply_text(
-                f"Ошибка при обработке выбора дня: {str(e)}",
-                reply_markup=get_schedule_keyboard(show_menu_button=True)
-            )
             return ConversationHandler.END
     
-    # Handle unexpected callback data
     logger.warning("unexpected callback data: %s", query.data, extra={
         'user_id': user_id,
         'chat_id': chat_id,
         'username': username
     })
-    await query.message.reply_text(
+    await send_message(
         "Ошибка: неизвестное действие.",
         reply_markup=get_schedule_keyboard(show_menu_button=True)
     )
@@ -865,51 +1005,60 @@ async def day_selection_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = update.message.text.strip()
     try:
         day = int(text)
+        chat_key = f"{update.effective_chat.id}"
+        users_data = load_users()
+        users_data.setdefault(chat_key, {'id_student': 90893})
+        id_student = users_data[chat_key]["id_student"]
+
+        try:
+            ics_content = download_ics(id_student)
+            events = parse_ics(ics_content)
+            schedule, target_date = get_day_schedule(events, day)
+            await update.message.reply_text(
+                f"Расписание на {day} {datetime.now(MSK).strftime('%B')}:\n{schedule}",
+                reply_markup=get_schedule_keyboard(exclude="day")
+            )
+            logger.info("sent schedule for day %s via text input", day, extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return ConversationHandler.END
+        except Exception as e:
+            error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+            if "504" in str(e):
+                error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+            elif "Read timeout" in str(e):
+                error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+            await update.message.reply_text(
+                error_message,
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
+            logger.error("failed to load schedule for day %s via text input: %s", day, str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return ConversationHandler.END
     except ValueError:
         await update.message.reply_text(
-            "Введите номер дня числом или используйте кнопки.",
+            "Используйте кнопки для выбора дня или введите номер дня числом.",
             reply_markup=get_day_selection_keyboard(page=0)
         )
+        logger.info("invalid day selection text: %s", text, extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
         return DAY_SELECTION
-    
-    chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    users_data.setdefault(chat_key, {'id_student': 90893})
-    id_student = users_data[chat_key]["id_student"]
-
-    try:
-        ics_content = download_ics(id_student)
-        events = parse_ics(ics_content)
-        schedule, target_date = get_day_schedule(events, day)
-        await update.message.reply_text(
-            f"Расписание на {day} {datetime.now(MSK).strftime('%B')}:\n{schedule}",
-            reply_markup=get_schedule_keyboard(exclude="day")
-        )
-        logger.info("sent schedule for day %s via text input", day, extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-        return ConversationHandler.END
-    except Exception as e:
-        await update.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
-        )
-        logger.error("failed to load schedule for day %s via text input: %s", day, str(e), extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-        return ConversationHandler.END
-
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     try:
-        await query.message.delete()
+        if query.message:
+            await query.message.delete()
     except Exception as e:
         logger.error("failed to delete message in handle_callback: %s", str(e), extra={
             'user_id': update.effective_user.id,
@@ -921,9 +1070,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_data = load_users()
     users_data.setdefault(chat_key, {'id_student': 90893})
     
+    async def send_message(text, reply_markup=None):
+        """Helper function to send message to the chat."""
+        try:
+            if query.message:
+                await query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=text, reply_markup=reply_markup)
+                logger.warning("query.message is None, sent message via context.bot", extra={
+                    'user_id': update.effective_user.id,
+                    'chat_id': update.effective_chat.id,
+                    'username': update.effective_user.username or 'unknown'
+                })
+        except Exception as e:
+            logger.error("failed to send message in handle_callback: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте еще раз.",
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
+            raise e
+    
     try:
         if query.data == "menu":
-            await query.message.reply_text(
+            await send_message(
                 f"Этот бот предоставляет расписание занятий на основе данных с портала Unitech.\n"
                 f"Бот был написан сотрудником МОРС с помощью AI Grok\n"
                 f"Расписание доступно для всех групп, используйте /change <название группы> для смены.\n"
@@ -946,9 +1120,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         if query.data == "change":
-            await query.message.reply_text(
-                "Использование: /change <название группы> (например, /change ПИ-23)",
-                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            await send_message(
+                "Использование: /change <название группы> (например, /change ПИ-23)"
             )
             logger.info("prompted for group change", extra={
                 'user_id': update.effective_user.id,
@@ -958,27 +1131,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         if query.data == "feedback":
-            await query.message.reply_text(
-                "Пожалуйста, отправьте ваше сообщение для обратной связи."
-            )
-            logger.info("started feedback via callback", extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return FEEDBACK_WAITING
+            return await feedback_start(update, context)
         
         if query.data == "day":
-            await query.message.reply_text(
-                "Выберите день для просмотра расписания:",
-                reply_markup=get_day_selection_keyboard(page=0)
-            )
-            logger.info("started day selection via callback", extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return DAY_SELECTION
+            return await day_selection_start(update, context)
         
         id_student = users_data[chat_key]["id_student"]
         ics_content = download_ics(id_student)
@@ -986,7 +1142,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if query.data == "today":
             schedule, _ = get_today_schedule(events)
-            await query.message.reply_text(f"Расписание на сегодня:\n{schedule}", reply_markup=get_schedule_keyboard(exclude="today"))
+            await send_message(
+                f"Расписание на сегодня:\n{schedule}",
+                reply_markup=get_schedule_keyboard(exclude="today")
+            )
             logger.info("sent today's schedule via callback", extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
@@ -994,7 +1153,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
         elif query.data == "tomorrow":
             schedule, _ = get_tomorrow_schedule(events)
-            await query.message.reply_text(f"Расписание на завтра:\n{schedule}", reply_markup=get_schedule_keyboard(exclude="tomorrow"))
+            await send_message(
+                f"Расписание на завтра:\n{schedule}",
+                reply_markup=get_schedule_keyboard(exclude="tomorrow")
+            )
             logger.info("sent tomorrow's schedule via callback", extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
@@ -1002,7 +1164,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
         elif query.data == "week":
             schedule, _ = get_week_schedule(events)
-            await query.message.reply_text(f"Расписание на неделю:\n{schedule}", reply_markup=get_schedule_keyboard(exclude="week"))
+            await send_message(
+                f"Расписание на неделю:\n{schedule}",
+                reply_markup=get_schedule_keyboard(exclude="week")
+            )
             logger.info("sent week's schedule via callback", extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
@@ -1010,15 +1175,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
         elif query.data == "next_week":
             schedule, _ = get_next_week_schedule(events)
-            await query.message.reply_text(f"Расписание на следующую неделю:\n{schedule}", reply_markup=get_schedule_keyboard(exclude="next_week"))
+            await send_message(
+                f"Расписание на следующую неделю:\n{schedule}",
+                reply_markup=get_schedule_keyboard(exclude="next_week")
+            )
             logger.info("sent next week's schedule via callback", extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
     except Exception as e:
-        await query.message.reply_text(
-            f"Ошибка при загрузке расписания: {str(e)}",
+        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        elif "Read timeout" in str(e):
+            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+        await send_message(
+            error_message,
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to process callback %s: %s", query.data, str(e), extra={
@@ -1028,7 +1201,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.strip()
     if update.effective_chat.type in ['group', 'supergroup']:
         bot_username = (await context.bot.get_me()).username
         if not (text.startswith(bot_username) or (update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id)):
@@ -1051,7 +1224,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text(
                 "Ошибка: номер дня должен быть числом (например, Расп. на день 17)",
-                reply_markup=get_schedule_keyboard(show_menu_button=True)
+                reply_markup=get_day_selection_keyboard(page=0)
             )
             logger.info("invalid text day command: non-numeric day provided", extra={
                 'user_id': update.effective_user.id,
@@ -1060,8 +1233,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
     else:
         await update.message.reply_text(
-            "Пожалуйста, используйте кнопки (в личных сообщениях) или команды /today, /tomorrow, /week, /next_week, /day, /info, /feedback.",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
+            "Пожалуйста, используйте кнопки или команды /today, /tomorrow, /week, /next_week, /day, /info, /feedback.",
+            reply_markup=get_menu_keyboard()
         )
         logger.info("received invalid text: %s", text, extra={
             'user_id': update.effective_user.id,
@@ -1075,16 +1248,36 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("error occurred: %s", str(context.error), extra={
+    error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
+    error_str = str(context.error) if context.error else "None"
+    if "504" in error_str:
+        error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+    elif "Read timeout" in error_str:
+        error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+    
+    logger.error("error occurred: %s\n%s", error_str, traceback.format_exc(), extra={
         'user_id': update.effective_user.id if update else 'unknown',
         'chat_id': update.effective_chat.id if update else 'unknown',
         'username': update.effective_user.username or 'unknown' if update else 'unknown'
     })
+    
     if update and update.message:
-        await update.message.reply_text(
-            f"Произошла ошибка: {str(context.error)}",
-            reply_markup=get_schedule_keyboard(show_menu_button=True)
-        )
+        try:
+            await update.message.reply_text(
+                error_message,
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
+        except Exception as e:
+            logger.error("failed to send error message: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=error_message,
+                reply_markup=get_schedule_keyboard(show_menu_button=True)
+            )
 
 if __name__ == '__main__':
     logger.info("bot started", extra={'user_id': 'system', 'chat_id': 'system', 'username': 'unknown'})
@@ -1098,10 +1291,13 @@ if __name__ == '__main__':
             CallbackQueryHandler(feedback_start, pattern="^feedback$")
         ],
         states={
-            FEEDBACK_WAITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, feedback_receive)],
+            FEEDBACK_WAITING: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, feedback_receive),
+                CommandHandler("cancel", feedback_cancel)
+            ],
         },
         fallbacks=[CommandHandler("cancel", feedback_cancel)],
-        per_message=True
+        per_message=False
     ))
     app.add_handler(ConversationHandler(
         entry_points=[
@@ -1110,12 +1306,12 @@ if __name__ == '__main__':
         ],
         states={
             DAY_SELECTION: [
-                CallbackQueryHandler(day_selection),  # обработка кнопок с номерами дней
-                MessageHandler(filters.TEXT & ~filters.COMMAND, day_selection_text)  # обработка текстового ввода (ниже создадим)
+                CallbackQueryHandler(day_selection),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, day_selection_text)
             ],
         },
         fallbacks=[CommandHandler("cancel", feedback_cancel)],
-        per_message=True
+        per_message=False
     ))
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("tomorrow", tomorrow_command))
@@ -1123,6 +1319,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("next_week", next_week_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.add_handler(MessageHandler(filters.COMMAND, error_handler))
     app.add_error_handler(error_handler)
     app.run_polling(timeout=20, drop_pending_updates=True)
