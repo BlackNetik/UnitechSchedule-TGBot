@@ -11,6 +11,8 @@ from keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_selectio
 from schedule import download_ics, parse_ics, get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
 from get_student_id import get_schedule
 
+from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
@@ -144,22 +146,42 @@ async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return FEEDBACK_WAITING
 
 async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text or update.message.text.strip() == "":
-        await update.message.reply_text(
-            "Пожалуйста, отправьте текстовое сообщение (не стикеры, фото и т.д.)."
-        )
-        return FEEDBACK_WAITING
+    feedback_text = update.message.text
+    user_id = update.effective_user.id
+    username = update.effective_user.username or 'unknown'
+    chat_id = update.effective_chat.id
     
-    feedback_message = update.message.text
-    await update.message.reply_text(
-        "Спасибо за ваш отзыв! Он отправлен разработчику.",
-        reply_markup=get_menu_keyboard()
-    )
-    logger.info("received feedback: %s", feedback_message, extra={
-        'user_id': update.effective_user.id,
-        'chat_id': update.effective_chat.id,
-        'username': update.effective_user.username or 'unknown'
+    logger.info("received feedback: %s", feedback_text, extra={
+        'user_id': user_id,
+        'chat_id': chat_id,
+        'username': username
     })
+    
+    try:
+        await context.bot.send_message(
+            chat_id=DEVELOPER_CHAT_ID,
+            text=f"Обратная связь от пользователя @{username} (ID: {user_id}, Chat: {chat_id}):\n{feedback_text}"
+        )
+        logger.info("sent feedback to developer", extra={
+            'user_id': user_id,
+            'chat_id': chat_id,
+            'username': username
+        })
+        await update.message.reply_text(
+            "Спасибо за обратную связь! Она отправлена разработчику.",
+            reply_markup=get_menu_keyboard()
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            "Произошла ошибка при отправке обратной связи. Пожалуйста, попробуйте позже.",
+            reply_markup=get_menu_keyboard()
+        )
+        logger.error("failed to send feedback: %s", str(e), extra={
+            'user_id': user_id,
+            'chat_id': chat_id,
+            'username': username
+        })
+    
     return ConversationHandler.END
 
 async def feedback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -629,6 +651,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
+        elif query.data == "change":
+            # Log the change button press
+            logger.info("change group button pressed", extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            # The change_start handler will take over due to ConversationHandler
+            return  # Exit early to avoid further processing
     except Exception as e:
         error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
         if "504" in str(e):
@@ -645,6 +676,80 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
+
+# Добавьте функцию для старта смены группы через кнопку
+async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            if query.message:
+                await query.message.delete()
+        except Exception as e:
+            logger.warning("failed to delete message in change_start: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+    
+    await (update.message or query.message).reply_text(
+        "Пожалуйста, введите название группы (например, ПИ-23)."
+    )
+    logger.info("started group change", extra={
+        'user_id': update.effective_user.id,
+        'chat_id': update.effective_chat.id,
+        'username': update.effective_user.username or 'unknown'
+    })
+    return CHANGE_GROUP_WAITING
+
+# Добавьте функцию для получения названия группы
+async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_name = update.message.text.strip()
+    chat_key = f"{update.effective_chat.id}"
+    users_data = load_users()
+    
+    try:
+        student_id = get_schedule(group_name)
+        if not student_id:
+            await update.message.reply_text(
+                f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
+                reply_markup=get_menu_keyboard()
+            )
+            logger.info("failed to find group or student for group: %s", group_name, extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return ConversationHandler.END
+        
+        users_data[chat_key] = users_data.get(chat_key, {})
+        users_data[chat_key]["id_student"] = student_id
+        users_data[chat_key]["group_name"] = group_name
+        save_users(users_data)
+        await update.message.reply_text(
+            f"Группа изменена на {group_name} (ID студента: {student_id})",
+            reply_markup=get_menu_keyboard()
+        )
+        logger.info("changed group to %s (student ID: %s)", group_name, student_id, extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+    except Exception as e:
+        error_message = "Произошла ошибка при поиске группы. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        logger.error("failed to change group %s: %s", group_name, str(e), extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        await update.message.reply_text(
+            error_message,
+            reply_markup=get_menu_keyboard()
+        )
+    
+    return ConversationHandler.END
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
