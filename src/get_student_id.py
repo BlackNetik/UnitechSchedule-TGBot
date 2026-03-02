@@ -1,6 +1,50 @@
 import requests
 import json
 
+# Cache for teachers list
+_teachers_cache = None
+
+def get_teachers():
+    """
+    Fetch list of teachers from the API.
+    Returns a list of teacher dictionaries with name, id, and kaf.
+    """
+    global _teachers_cache
+    if _teachers_cache is not None:
+        return _teachers_cache
+    
+    url = "https://es.unitech-mo.ru/api/raspTeacherlist"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        teachers = data.get("data", [])
+        _teachers_cache = teachers
+        return teachers
+    except requests.RequestException as e:
+        print(f"Error fetching teachers: {e}")
+        return []
+
+def find_teacher(search_name):
+    """
+    Find teacher(s) by name (partial match).
+    Returns a list of matching teachers.
+    """
+    teachers = get_teachers()
+    if not teachers:
+        return []
+    
+    search_lower = search_name.lower()
+    matches = []
+    
+    for teacher in teachers:
+        name = teacher.get("name", "")
+        if search_lower in name.lower():
+            matches.append(teacher)
+    
+    return matches
+
 def get_group_id(group_name):
     """
     Fetch groupID from the groups API by group name.

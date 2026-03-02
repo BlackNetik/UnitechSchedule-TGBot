@@ -12,3 +12,7 @@ __pycache__/
 # Logs
 Logs/
 Logs/log
+
+# Local files
+TODO.md
+users.json

@@ -6,6 +6,8 @@ LAST_UPDATED = "02.03.2026"
 FEEDBACK_WAITING = 1
 DAY_SELECTION = 2
 CHANGE_GROUP_WAITING = 3  # Добавлено для смены группы
+TEACHER_SELECT_WAITING = 4  # Для выбора преподавателя
+STUDENT_GROUP_WAITING = 5  # Для ввода названия группы студентом
 
 LOGS_DIR = "Logs"
 API_KEY_FILE = 'api_key_journal_unitech.txt'

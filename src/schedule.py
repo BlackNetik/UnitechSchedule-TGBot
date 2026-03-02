@@ -123,6 +123,26 @@ def download_ics(id_student):
         logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception(f"Failed to download ICS file: {str(e)}")
 
+def download_teacher_ics(teacher_id):
+    url = f"https://es.unitech-mo.ru/api/Rasp?idTeacher={teacher_id}&iCal=true"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        if not response.content:
+            raise Exception("Empty response from server")
+        return response.content
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 504:
+            logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+            raise Exception("504 Server Error: Gateway Time-out")
+        raise Exception(f"Failed to download teacher ICS file: {str(e)}")
+    except requests.exceptions.ReadTimeout as e:
+        logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+        raise Exception("Read timeout error: Failed to connect to server")
+    except requests.exceptions.RequestException as e:
+        logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+        raise Exception(f"Failed to download teacher ICS file: {str(e)}")
+
 def parse_ics(ics_content):
     try:
         cal = Calendar.from_ical(ics_content)

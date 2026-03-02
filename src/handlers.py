@@ -9,11 +9,11 @@ from telegram.ext import ContextTypes, ConversationHandler
 from datetime import datetime
 import traceback
 
-from config import BOT_VERSION, LAST_UPDATED, FEEDBACK_WAITING, DAY_SELECTION
+from config import BOT_VERSION, LAST_UPDATED, FEEDBACK_WAITING, DAY_SELECTION, TEACHER_SELECT_WAITING, STUDENT_GROUP_WAITING
 from src.utils import load_users, save_users, MSK, logger
-from src.keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_selection_keyboard
-from src.schedule import download_ics, parse_ics, get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
-from src.get_student_id import get_schedule
+from src.keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_selection_keyboard, get_change_group_keyboard
+from src.schedule import download_ics, download_teacher_ics, parse_ics, get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
+from src.get_student_id import get_schedule, find_teacher
 
 from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID, DEVELOPER_USERNAME
 
@@ -47,7 +47,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/week — расписание на неделю\n"
         f"/next_week — расписание на следующую неделю\n"
         f"/day <номер_дня> — расписание на указанный день текущего месяца\n"
-        f"/change — смена группы\n"
+        f"/change — смена расписания\n"
         f"/feedback — отправить обратную связь разработчику",
         reply_markup=get_menu_keyboard()
     )
@@ -321,17 +321,32 @@ async def day_selection_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         })
         return DAY_SELECTION
 
+def get_schedule_events(chat_key):
+    """Helper function to get events based on user type (student or teacher)"""
+    users_data = load_users()
+    user_data = users_data.get(chat_key, {})
+    
+    # Check if teacher mode is enabled
+    if "id_teacher" in user_data:
+        teacher_id = user_data["id_teacher"]
+        ics_content = download_teacher_ics(teacher_id)
+    else:
+        student_id = user_data.get('id_student', 90893)
+        ics_content = download_ics(student_id)
+    
+    events = parse_ics(ics_content)
+    return events, user_data
+
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     try:
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         schedule, _ = get_today_schedule(events)
+        
+        user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
         await update.message.reply_text(
-            f"Расписание на сегодня:\n{schedule}",
+            f"Расписание для {user_type}:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="today")
         )
         logger.info("sent today's schedule", extra={
@@ -357,15 +372,14 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     try:
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         schedule, _ = get_tomorrow_schedule(events)
+        
+        user_type = "преподавателя" if "id_teacher" in user_data else "завтра"
         await update.message.reply_text(
-            f"Расписание на завтра:\n{schedule}",
+            f"Расписание на {user_type}:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="tomorrow")
         )
         logger.info("sent tomorrow's schedule", extra={
@@ -391,12 +405,9 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     try:
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         schedule, _ = get_week_schedule(events)
         await update.message.reply_text(
             f"Расписание на неделю:\n{schedule}",
@@ -425,12 +436,9 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     try:
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         schedule, _ = get_next_week_schedule(events)
         await update.message.reply_text(
             f"Расписание на следующую неделю:\n{schedule}",
@@ -459,8 +467,6 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     chat_key = f"{chat_id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     if len(context.args) < 1:
         try:
@@ -488,8 +494,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
     
     try:
         day = int(context.args[0])
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         schedule, _ = get_day_schedule(events, day)
         try:
             await (update.message or update.callback_query.message).reply_text(
@@ -611,19 +616,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
     
+    # Handle student/teacher selection callbacks
+    if query.data == "change_student":
+        await change_student_start(update, context)
+        return
+    elif query.data == "change_teacher":
+        await change_teacher_start(update, context)
+        return
+    elif query.data.startswith("teacher_select_"):
+        await teacher_select_receive(update, context)
+        return
+    
     chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-    student_id = users_data.get(chat_key, {}).get('id_student', 90893)
     
     try:
-        ics_content = download_ics(student_id)
-        events = parse_ics(ics_content)
+        events, user_data = get_schedule_events(chat_key)
         
         if query.data == "today":
             schedule, _ = get_today_schedule(events)
+            user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
             await send_message(
                 query, context,
-                f"Расписание на сегодня:\n{schedule}",
+                f"Расписание для {user_type}:\n{schedule}",
                 reply_markup=get_schedule_keyboard(exclude="today")
             )
             logger.info("sent today's schedule via callback", extra={
@@ -633,9 +647,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
         elif query.data == "tomorrow":
             schedule, _ = get_tomorrow_schedule(events)
+            user_type = "преподавателя" if "id_teacher" in user_data else "завтра"
             await send_message(
                 query, context,
-                f"Расписание на завтра:\n{schedule}",
+                f"Расписание на {user_type}:\n{schedule}",
                 reply_markup=get_schedule_keyboard(exclude="tomorrow")
             )
             logger.info("sent tomorrow's schedule via callback", extra={
@@ -668,14 +683,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
         elif query.data == "change":
-            # Log the change button press
             logger.info("change group button pressed", extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-            # The change_start handler will take over due to ConversationHandler
-            return  # Exit early to avoid further processing
+            return
     except Exception as e:
         error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
         if "504" in str(e):
@@ -693,7 +706,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
-# Добавьте функцию для старта смены группы через кнопку
+# Change group/teacher handlers
 async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
@@ -709,17 +722,18 @@ async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
     
     await (update.message or query.message).reply_text(
-        "Пожалуйста, введите название группы (например, ПИ-23)."
+        "Выберите тип: студент или преподаватель?",
+        reply_markup=get_change_group_keyboard()
     )
-    logger.info("started group change", extra={
+    logger.info("started group/teacher change", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
     })
     return CHANGE_GROUP_WAITING
 
-# Добавьте функцию для получения названия группы
 async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle student group name input"""
     group_name = update.message.text.strip()
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
@@ -741,6 +755,11 @@ async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_data[chat_key] = users_data.get(chat_key, {})
         users_data[chat_key]["id_student"] = student_id
         users_data[chat_key]["group_name"] = group_name
+        # Clear teacher data when switching to student mode
+        if "id_teacher" in users_data[chat_key]:
+            del users_data[chat_key]["id_teacher"]
+        if "teacher_name" in users_data[chat_key]:
+            del users_data[chat_key]["teacher_name"]
         save_users(users_data)
         await update.message.reply_text(
             f"Группа изменена на {group_name} (ID студента: {student_id})",
@@ -766,6 +785,182 @@ async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     return ConversationHandler.END
+
+# Teacher selection handlers
+async def change_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Я студент' button - asks for group name"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            if query.message:
+                await query.message.delete()
+        except Exception as e:
+            logger.warning("failed to delete message in change_student_start: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+    
+    await (update.message or query.message).reply_text(
+        "Пожалуйста, введите название группы (например, ПИ-23)."
+    )
+    logger.info("started student group change", extra={
+        'user_id': update.effective_user.id,
+        'chat_id': update.effective_chat.id,
+        'username': update.effective_user.username or 'unknown'
+    })
+    return STUDENT_GROUP_WAITING  # Return different state for student
+
+async def change_teacher_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Я преподаватель' button - asks for teacher name"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            if query.message:
+                await query.message.delete()
+        except Exception as e:
+            logger.warning("failed to delete message in change_teacher_start: %s", str(e), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+    
+    await (update.message or query.message).reply_text(
+        "Введите имя преподавателя (например, Иван или Петров А.С.):"
+    )
+    logger.info("started teacher change, returning TEACHER_SELECT_WAITING=%s", TEACHER_SELECT_WAITING, extra={
+        'user_id': update.effective_user.id,
+        'chat_id': update.effective_chat.id,
+        'username': update.effective_user.username or 'unknown'
+    })
+    return TEACHER_SELECT_WAITING
+
+async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle teacher name input and search for teachers"""
+    teacher_name = update.message.text.strip()
+    chat_key = f"{update.effective_chat.id}"
+    users_data = load_users()
+    
+    try:
+        teachers = find_teacher(teacher_name)
+        
+        if not teachers:
+            await update.message.reply_text(
+                f"Преподаватель '{teacher_name}' не найден. Попробуйте ввести другое имя или часть имени.",
+                reply_markup=get_menu_keyboard()
+            )
+            logger.info("teacher not found: %s", teacher_name, extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return ConversationHandler.END
+        
+        if len(teachers) > 1:
+            keyboard = []
+            for teacher in teachers[:10]:
+                keyboard.append([InlineKeyboardButton(teacher['name'], callback_data=f"teacher_select_{teacher['id']}")])
+            keyboard.append([InlineKeyboardButton("Отмена", callback_data="menu")])
+            
+            await update.message.reply_text(
+                f"Найдено несколько преподавателей. Выберите нужного:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            logger.info("multiple teachers found for %s: %d matches", teacher_name, len(teachers), extra={
+                'user_id': update.effective_user.id,
+                'chat_id': update.effective_chat.id,
+                'username': update.effective_user.username or 'unknown'
+            })
+            return TEACHER_SELECT_WAITING
+        
+        teacher = teachers[0]
+        teacher_id = teacher['id']
+        teacher_name_full = teacher['name']
+        
+        users_data[chat_key] = users_data.get(chat_key, {})
+        users_data[chat_key]["id_teacher"] = teacher_id
+        users_data[chat_key]["teacher_name"] = teacher_name_full
+        if "id_student" in users_data[chat_key]:
+            del users_data[chat_key]["id_student"]
+        if "group_name" in users_data[chat_key]:
+            del users_data[chat_key]["group_name"]
+        save_users(users_data)
+        
+        await update.message.reply_text(
+            f"Выбран преподаватель: {teacher_name_full} (ID: {teacher_id})",
+            reply_markup=get_menu_keyboard()
+        )
+        logger.info("changed teacher to %s (ID: %s)", teacher_name_full, teacher_id, extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        
+    except Exception as e:
+        error_message = "Произошла ошибка при поиске преподавателя. Пожалуйста, попробуйте еще раз."
+        if "504" in str(e):
+            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+        logger.error("failed to find teacher %s: %s", teacher_name, str(e), extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        await update.message.reply_text(
+            error_message,
+            reply_markup=get_menu_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle teacher selection from list when multiple matches found"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data.startswith("teacher_select_"):
+        teacher_id = int(query.data.split("_")[-1])
+        chat_key = f"{update.effective_chat.id}"
+        users_data = load_users()
+        
+        teachers = find_teacher("")
+        teacher_name = ""
+        for t in teachers:
+            if t['id'] == teacher_id:
+                teacher_name = t['name']
+                break
+        
+        users_data[chat_key] = users_data.get(chat_key, {})
+        users_data[chat_key]["id_teacher"] = teacher_id
+        users_data[chat_key]["teacher_name"] = teacher_name
+        if "id_student" in users_data[chat_key]:
+            del users_data[chat_key]["id_student"]
+        if "group_name" in users_data[chat_key]:
+            del users_data[chat_key]["group_name"]
+        save_users(users_data)
+        
+        try:
+            await query.message.edit_text(
+                f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
+                reply_markup=get_menu_keyboard()
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
+                reply_markup=get_menu_keyboard()
+            )
+        
+        logger.info("selected teacher from list: %s (ID: %s)", teacher_name, teacher_id, extra={
+            'user_id': update.effective_user.id,
+            'chat_id': update.effective_chat.id,
+            'username': update.effective_user.username or 'unknown'
+        })
+        
+        return ConversationHandler.END
+    
+    return TEACHER_SELECT_WAITING
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
