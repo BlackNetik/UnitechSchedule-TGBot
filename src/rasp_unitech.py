@@ -4,18 +4,21 @@ import locale
 import sys
 import os
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 )
 
-from config import FEEDBACK_WAITING, DAY_SELECTION, CHANGE_GROUP_WAITING
-from logging_setup import setup_logging
-from utils import load_api_key
-from handlers import (
+from config import FEEDBACK_WAITING, DAY_SELECTION, CHANGE_GROUP_WAITING  # Added CHANGE_GROUP_WAITING
+from src.logging_setup import setup_logging
+from src.utils import load_api_key
+from src.handlers import (
     start, info, change_command, feedback_start, feedback_receive, feedback_cancel,
     today_command, tomorrow_command, week_command, next_week_command, day_command,
     day_selection_start, day_selection, day_selection_text, handle_callback, text_handler, error_handler,
-    change_start, change_receive
+    change_start, change_receive  # Added change_start, change_receive
 )
 
 # Установка локали для русского языка
