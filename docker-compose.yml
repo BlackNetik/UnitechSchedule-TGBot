@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_API_KEY=${TELEGRAM_API_KEY}
+    volumes:
+      - ./users.json:/app/users.json
+      - ./Logs:/app/Logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
