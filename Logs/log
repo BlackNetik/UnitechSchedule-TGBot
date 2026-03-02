@@ -1,0 +1,52 @@
+2026-03-02 13:52:35,566 - User system (unknown) in chat system: bot started
+2026-03-02 13:52:35,566 - User system (unknown) in chat system: bot started
+2026-03-02 13:52:41,338 - User system (unknown) in chat system: Created empty users.json
+2026-03-02 13:52:41,338 - User system (unknown) in chat system: Created empty users.json
+2026-03-02 13:52:41,866 - User 1854847621 (BlackNetRus) in chat 1854847621: sent start menu
+2026-03-02 13:52:41,866 - User 1854847621 (BlackNetRus) in chat 1854847621: sent start menu
+2026-03-02 13:52:44,366 - User 1854847621 (BlackNetRus) in chat 1854847621: sent today's schedule via callback
+2026-03-02 13:52:44,366 - User 1854847621 (BlackNetRus) in chat 1854847621: sent today's schedule via callback
+2026-03-02 13:52:49,351 - User 1854847621 (BlackNetRus) in chat 1854847621: sent tomorrow's schedule via callback
+2026-03-02 13:52:49,351 - User 1854847621 (BlackNetRus) in chat 1854847621: sent tomorrow's schedule via callback
+2026-03-02 13:52:58,484 - User 1854847621 (BlackNetRus) in chat 1854847621: sent week's schedule via callback
+2026-03-02 13:52:58,484 - User 1854847621 (BlackNetRus) in chat 1854847621: sent week's schedule via callback
+2026-03-02 13:53:08,586 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to delete message in handle_callback: Timed out
+2026-03-02 13:53:08,586 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to delete message in handle_callback: Timed out
+2026-03-02 13:53:10,520 - User 1854847621 (BlackNetRus) in chat 1854847621: sent next week's schedule via callback
+2026-03-02 13:53:10,520 - User 1854847621 (BlackNetRus) in chat 1854847621: sent next week's schedule via callback
+2026-03-02 13:53:13,752 - User 1854847621 (BlackNetRus) in chat 1854847621: started day selection
+2026-03-02 13:53:13,752 - User 1854847621 (BlackNetRus) in chat 1854847621: started day selection
+2026-03-02 13:53:19,081 - User 1854847621 (BlackNetRus) in chat 1854847621: sent schedule for day 3
+2026-03-02 13:53:19,081 - User 1854847621 (BlackNetRus) in chat 1854847621: sent schedule for day 3
+2026-03-02 13:53:24,288 - User 1854847621 (BlackNetRus) in chat 1854847621: returned to menu via callback
+2026-03-02 13:53:24,288 - User 1854847621 (BlackNetRus) in chat 1854847621: returned to menu via callback
+2026-03-02 13:53:30,118 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 13:53:30,118 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 13:53:35,792 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: Всё супер!
+2026-03-02 13:53:35,792 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: Всё супер!
+2026-03-02 13:53:37,396 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to send feedback: Chat not found
+2026-03-02 13:53:37,396 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to send feedback: Chat not found
+2026-03-02 13:54:15,214 - User 1854847621 (BlackNetRus) in chat 1854847621: returned to menu via callback
+2026-03-02 13:54:15,214 - User 1854847621 (BlackNetRus) in chat 1854847621: returned to menu via callback
+2026-03-02 13:58:46,796 - User system (unknown) in chat system: bot started
+2026-03-02 13:58:46,796 - User system (unknown) in chat system: bot started
+2026-03-02 13:59:01,868 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 13:59:01,868 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 13:59:08,941 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: Всё супер?
+2026-03-02 13:59:08,941 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: Всё супер?
+2026-03-02 13:59:09,492 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to send feedback: Chat not found. DEVELOPER_CHAT_ID=-4956911463 may be invalid or bot was removed from the chat.
+2026-03-02 13:59:09,492 - User 1854847621 (BlackNetRus) in chat 1854847621: failed to send feedback: Chat not found. DEVELOPER_CHAT_ID=-4956911463 may be invalid or bot was removed from the chat.
+2026-03-02 14:03:31,892 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 14:03:31,892 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 14:03:37,521 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: а теперь работает?
+2026-03-02 14:03:37,521 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: а теперь работает?
+2026-03-02 14:03:38,366 - User 1854847621 (BlackNetRus) in chat 1854847621: sent feedback to developer
+2026-03-02 14:03:38,366 - User 1854847621 (BlackNetRus) in chat 1854847621: sent feedback to developer
+2026-03-02 14:12:45,074 - User system (unknown) in chat system: bot started
+2026-03-02 14:12:45,074 - User system (unknown) in chat system: bot started
+2026-03-02 14:12:49,267 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 14:12:49,267 - User 1854847621 (BlackNetRus) in chat 1854847621: requested feedback message
+2026-03-02 14:12:54,059 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: угабуга
+2026-03-02 14:12:54,059 - User 1854847621 (BlackNetRus) in chat 1854847621: received feedback: угабуга
+2026-03-02 14:12:54,415 - User 1854847621 (BlackNetRus) in chat 1854847621: sent feedback to developer
+2026-03-02 14:12:54,415 - User 1854847621 (BlackNetRus) in chat 1854847621: sent feedback to developer

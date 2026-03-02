@@ -5,7 +5,7 @@ from icalendar import Calendar
 from datetime import datetime, timedelta
 import calendar
 
-from utils import MSK, logger
+from src.utils import MSK, logger
 
 class ScheduleFormatter:
     @staticmethod

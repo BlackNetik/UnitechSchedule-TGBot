@@ -15,7 +15,7 @@ from src.keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_sele
 from src.schedule import download_ics, parse_ics, get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
 from src.get_student_id import get_schedule
 
-from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID
+from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID, DEVELOPER_USERNAME
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
@@ -161,6 +161,7 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'username': username
     })
     
+    error_message = None
     try:
         await context.bot.send_message(
             chat_id=DEVELOPER_CHAT_ID,
@@ -176,15 +177,26 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_menu_keyboard()
         )
     except Exception as e:
+        error_str = str(e)
+        if "Chat not found" in error_str:
+            error_message = f"Не удалось отправить обратную связь. Пожалуйста, свяжитесь с разработчиком напрямую: {DEVELOPER_USERNAME}"
+            logger.error("failed to send feedback: Chat not found. DEVELOPER_CHAT_ID=%s may be invalid or bot was removed from the chat.", DEVELOPER_CHAT_ID, extra={
+                'user_id': user_id,
+                'chat_id': chat_id,
+                'username': username
+            })
+        else:
+            error_message = "Произошла ошибка при отправке обратной связи. Пожалуйста, попробуйте позже."
+            logger.error("failed to send feedback: %s", error_str, extra={
+                'user_id': user_id,
+                'chat_id': chat_id,
+                'username': username
+            })
+        
         await update.message.reply_text(
-            "Произошла ошибка при отправке обратной связи. Пожалуйста, попробуйте позже.",
+            error_message,
             reply_markup=get_menu_keyboard()
         )
-        logger.error("failed to send feedback: %s", str(e), extra={
-            'user_id': user_id,
-            'chat_id': chat_id,
-            'username': username
-        })
     
     return ConversationHandler.END
 
