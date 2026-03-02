@@ -30,8 +30,8 @@
 1. Клонируйте репозиторий:
    
 ```
-   git clone https://github.com/yourusername/unitech-schedule-bot.git
-   cd unitech-schedule-bot
+   git clone https://github.com/BlackNetik/UnitechSchedule-TGBot
+   cd UnitechSchedule-TGBot
    
 ```
 2. Создайте файл `api_key_journal_unitech.txt` в корне проекта и вставьте в него ваш Telegram API токен (одна строка, без кавычек).
@@ -44,6 +44,17 @@
 ```
 
 Бот автоматически создаст необходимые файлы: `users.json` для хранения данных пользователей и директорию `Logs` для логов.
+
+### Обновление бота
+Для обновления бота до последней версии выполните:
+   
+```
+   git pull
+   docker build -t unitechschedule-tgbot .
+   
+```
+   
+Затем перезапустите контейнер.
 
 ## Запуск в Docker
 
