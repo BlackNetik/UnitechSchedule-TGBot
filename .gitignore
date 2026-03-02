@@ -1,1 +1,5 @@
 api_key_journal_unitech.txt
+
+# Environment variables
+.env
+.env.local

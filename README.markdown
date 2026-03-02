@@ -19,25 +19,112 @@
 ## Требования
 - Python 3.8 или выше.
 - Зависимости (установите через pip):
-  ```
+  
+```
   pip install python-telegram-bot requests icalendar
-  ```
+  
+```
 - Telegram API токен (получите у @BotFather).
 
 ## Установка
 1. Клонируйте репозиторий:
-   ```
+   
+```
    git clone https://github.com/yourusername/unitech-schedule-bot.git
    cd unitech-schedule-bot
-   ```
+   
+```
 2. Создайте файл `api_key_journal_unitech.txt` в корне проекта и вставьте в него ваш Telegram API токен (одна строка, без кавычек).
 3. Установите зависимости (см. выше).
 4. Запустите бота:
-   ```
+   
+```
    python rasp_unitech.py
-   ```
+   
+```
 
 Бот автоматически создаст необходимые файлы: `users.json` для хранения данных пользователей и директорию `Logs` для логов.
+
+## Запуск в Docker
+
+### Требования
+- Docker Desktop (установленный на Windows/Mac/Linux)
+
+### Способ 1: Через Docker Desktop (GUI)
+
+1. Соберите образ:
+   - Откройте Docker Desktop
+   - Перейдите на вкладку **Images**
+   - Нажмите кнопку **Build image**
+   - Выберите папку проекта (где находится Dockerfile)
+   - Введите имя образа, например: `unitech-bot`
+   - Нажмите **Build**
+
+2. Запустите контейнер:
+   - Перейдите на вкладку **Containers**
+   - Нажмите **Run** на вашем образе `unitech-bot`
+   - В разделе **Optional settings**:
+     - **Environment variables**: добавьте `TELEGRAM_API_KEY` = ваш_токен_от_BotFather
+   - Нажмите **Run**
+
+3. Проверьте работу:
+   - Откройте вкладку **Containers**
+   - Нажмите на `unitech-bot`
+   - Смотрите логи во вкладке **Logs**
+
+### Способ 2: Через командную строку
+
+1. Соберите образ:
+   
+```
+   docker build -t unitech-bot .
+   
+```
+
+2. Запустите контейнер:
+   
+```
+   docker run -d --name unitech-bot -e TELEGRAM_API_KEY=ваш_токен unitech-bot
+   
+```
+
+3. Проверьте логи:
+   
+```
+   docker logs unitech-bot
+   
+```
+
+### Способ 3: Через Docker Compose
+
+1. Создайте файл `.env` в корне проекта:
+   
+```
+   TELEGRAM_API_KEY=ваш_токен_от_BotFather
+   
+```
+
+2. Запустите:
+   
+```
+   docker-compose up -d
+   
+```
+
+### Управление контейнером
+
+- **Остановить:** `docker stop unitech-bot`
+- **Запустить:** `docker start unitech-bot`
+- **Перезапустить:** `docker restart unitech-bot`
+- **Удалить:** `docker rm unitech-bot`
+- **Просмотреть логи:** `docker logs -f unitech-bot`
+
+### Важно: Переменные окружения
+
+При запуске через Docker Desktop обязательно укажите переменную окружения:
+- **TELEGRAM_API_KEY** — ваш токен Telegram бота (получите у @BotFather)
+
+Без этой переменной бот не запустится.
 
 ## Использование
 - Найдите бота в Telegram по его username (укажите при создании в @BotFather).
