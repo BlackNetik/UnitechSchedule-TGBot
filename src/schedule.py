@@ -1,11 +1,12 @@
 # schedule.py
 
-import requests
+import httpx
 from icalendar import Calendar
 from datetime import datetime, timedelta
 import calendar
 
 from src.utils import MSK, logger
+
 
 class ScheduleFormatter:
     @staticmethod
@@ -27,6 +28,7 @@ class ScheduleFormatter:
 
     @staticmethod
     def format_event(event):
+        category = 'Прочее'
         try:
             start_time = event['dtstart'].astimezone(MSK)
             end_time = event['dtend'].astimezone(MSK)
@@ -35,7 +37,7 @@ class ScheduleFormatter:
             summary = event['summary']
             location = event['location']
             description = event['description']
-            
+
             summary_lower = summary.lower()
             if 'зач' in summary_lower.split()[0]:
                 emoji = '✏️'
@@ -60,14 +62,14 @@ class ScheduleFormatter:
             else:
                 emoji = '🔔'
                 category = 'Прочее'
-            
+
             summary = f"{summary} ({category})"
             pair_number = ScheduleFormatter.get_pair_number(start_time)
             time_prefix = f"{pair_number} пара: " if pair_number else ""
             return f" 🕘 {time_prefix}{start_time_str}-{end_time_str}\n{emoji} {summary}\nАудитория: {location}\n{description}\n"
         except Exception as e:
             logger.error("failed to format event: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-            return f"🔔 Error formatting event: {event['summary']} ({category})\n"
+            return f"🔔 Error formatting event: {event.get('summary', '?')} ({category})\n"
 
     @staticmethod
     def format_daily_schedule(events, date):
@@ -103,45 +105,50 @@ class ScheduleFormatter:
             current_date += timedelta(days=1)
         return "\n".join(schedule)
 
-def download_ics(id_student):
+
+async def download_ics(id_student):
     url = f"https://es.unitech-mo.ru/api/Rasp?idStudent={id_student}&iCal=true"
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        if not response.content:
-            raise Exception("Empty response from server")
-        return response.content
-    except requests.exceptions.HTTPError as e:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            if not response.content:
+                raise Exception("Empty response from server")
+            return response.content
+    except httpx.HTTPStatusError as e:
         if e.response.status_code == 504:
             logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
             raise Exception("504 Server Error: Gateway Time-out")
         raise Exception(f"Failed to download ICS file: {str(e)}")
-    except requests.exceptions.ReadTimeout as e:
-        logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+    except httpx.TimeoutException as e:
+        logger.error("failed to download ICS file (timeout): %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception("Read timeout error: Failed to connect to server")
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception(f"Failed to download ICS file: {str(e)}")
 
-def download_teacher_ics(teacher_id):
+
+async def download_teacher_ics(teacher_id):
     url = f"https://es.unitech-mo.ru/api/Rasp?idTeacher={teacher_id}&iCal=true"
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        if not response.content:
-            raise Exception("Empty response from server")
-        return response.content
-    except requests.exceptions.HTTPError as e:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            if not response.content:
+                raise Exception("Empty response from server")
+            return response.content
+    except httpx.HTTPStatusError as e:
         if e.response.status_code == 504:
             logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
             raise Exception("504 Server Error: Gateway Time-out")
         raise Exception(f"Failed to download teacher ICS file: {str(e)}")
-    except requests.exceptions.ReadTimeout as e:
-        logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+    except httpx.TimeoutException as e:
+        logger.error("failed to download teacher ICS file (timeout): %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception("Read timeout error: Failed to connect to server")
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception(f"Failed to download teacher ICS file: {str(e)}")
+
 
 def parse_ics(ics_content):
     try:
@@ -164,13 +171,16 @@ def parse_ics(ics_content):
         logger.error("failed to parse ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
         raise Exception(f"Failed to parse ICS file: {str(e)}")
 
+
 def get_today_schedule(events):
     today = datetime.now(MSK).date()
     return ScheduleFormatter.format_daily_schedule(events, today), today
 
+
 def get_tomorrow_schedule(events):
     tomorrow = datetime.now(MSK).date() + timedelta(days=1)
     return ScheduleFormatter.format_daily_schedule(events, tomorrow), tomorrow
+
 
 def get_week_schedule(events):
     today = datetime.now(MSK).date()
@@ -179,12 +189,14 @@ def get_week_schedule(events):
     end_date = start_date + timedelta(days=6)
     return ScheduleFormatter.format_week_schedule(events, start_date, end_date), None
 
+
 def get_next_week_schedule(events):
     today = datetime.now(MSK).date()
     days_until_monday = (7 - today.weekday()) % 7 or 7
     start_date = today + timedelta(days=days_until_monday)
     end_date = start_date + timedelta(days=6)
     return ScheduleFormatter.format_week_schedule(events, start_date, end_date), None
+
 
 def get_day_schedule(events, day):
     today = datetime.now(MSK)

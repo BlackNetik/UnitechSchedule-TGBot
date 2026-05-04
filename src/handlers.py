@@ -17,6 +17,7 @@ from src.get_student_id import get_schedule, find_teacher
 
 from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID, DEVELOPER_USERNAME
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
@@ -34,6 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
     })
+
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -57,6 +59,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'username': update.effective_user.username or 'unknown'
     })
 
+
 async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
@@ -70,10 +73,10 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
         return
-    
+
     group_name = ' '.join(context.args)
     try:
-        student_id = get_schedule(group_name)
+        student_id = await get_schedule(group_name)
         if not student_id:
             await update.message.reply_text(
                 f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
@@ -99,7 +102,7 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_menu_keyboard()
         )
         return
-    
+
     users_data[chat_key] = users_data.get(chat_key, {})
     users_data[chat_key]["id_student"] = student_id
     users_data[chat_key]["group_name"] = group_name
@@ -114,6 +117,7 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'username': update.effective_user.username or 'unknown'
     })
 
+
 async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
@@ -126,7 +130,7 @@ async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-    
+
     try:
         await (update.message or update.callback_query.message).reply_text(
             "Пожалуйста, отправьте ваше сообщение для обратной связи."
@@ -141,7 +145,7 @@ async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-    
+
     logger.info("requested feedback message", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
@@ -149,18 +153,19 @@ async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
     return FEEDBACK_WAITING
 
+
 async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     feedback_text = update.message.text
     user_id = update.effective_user.id
     username = update.effective_user.username or 'unknown'
     chat_id = update.effective_chat.id
-    
+
     logger.info("received feedback: %s", feedback_text, extra={
         'user_id': user_id,
         'chat_id': chat_id,
         'username': username
     })
-    
+
     error_message = None
     try:
         await context.bot.send_message(
@@ -192,13 +197,14 @@ async def feedback_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': chat_id,
                 'username': username
             })
-        
+
         await update.message.reply_text(
             error_message,
             reply_markup=get_menu_keyboard()
         )
-    
+
     return ConversationHandler.END
+
 
 async def feedback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -212,6 +218,7 @@ async def feedback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
     return ConversationHandler.END
 
+
 async def day_selection_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
@@ -224,7 +231,7 @@ async def day_selection_start(update: Update, context: ContextTypes.DEFAULT_TYPE
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-    
+
     try:
         await (update.message or update.callback_query.message).reply_text(
             "Выберите день текущего месяца:",
@@ -241,7 +248,7 @@ async def day_selection_start(update: Update, context: ContextTypes.DEFAULT_TYPE
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-    
+
     logger.info("started day selection", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
@@ -249,10 +256,11 @@ async def day_selection_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     })
     return DAY_SELECTION
 
+
 async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data.startswith("day_page_"):
         page = int(query.data.split("_")[-1])
         try:
@@ -272,13 +280,13 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_day_selection_keyboard(page=page)
             )
         return DAY_SELECTION
-    
+
     elif query.data.startswith("day_select_"):
         day = int(query.data.split("_")[-1])
         context.args = [str(day)]
         await day_command(update, context, query.message.chat_id)
         return ConversationHandler.END
-    
+
     elif query.data == "menu":
         try:
             await query.message.edit_text(
@@ -303,6 +311,7 @@ async def day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return ConversationHandler.END
 
+
 async def day_selection_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         day = int(update.message.text.strip())
@@ -321,29 +330,30 @@ async def day_selection_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         })
         return DAY_SELECTION
 
-def get_schedule_events(chat_key):
+
+async def get_schedule_events(chat_key):
     """Helper function to get events based on user type (student or teacher)"""
     users_data = load_users()
     user_data = users_data.get(chat_key, {})
-    
-    # Check if teacher mode is enabled
+
     if "id_teacher" in user_data:
         teacher_id = user_data["id_teacher"]
-        ics_content = download_teacher_ics(teacher_id)
+        ics_content = await download_teacher_ics(teacher_id)
     else:
         student_id = user_data.get('id_student', 90893)
-        ics_content = download_ics(student_id)
-    
+        ics_content = await download_ics(student_id)
+
     events = parse_ics(ics_content)
     return events, user_data
 
+
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    
+
     try:
-        events, user_data = get_schedule_events(chat_key)
+        events, user_data = await get_schedule_events(chat_key)
         schedule, _ = get_today_schedule(events)
-        
+
         user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
         await update.message.reply_text(
             f"Расписание для {user_type}:\n{schedule}",
@@ -370,13 +380,14 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
+
 async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    
+
     try:
-        events, user_data = get_schedule_events(chat_key)
+        events, user_data = await get_schedule_events(chat_key)
         schedule, _ = get_tomorrow_schedule(events)
-        
+
         user_type = "преподавателя" if "id_teacher" in user_data else "завтра"
         await update.message.reply_text(
             f"Расписание на {user_type}:\n{schedule}",
@@ -403,11 +414,12 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
+
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    
+
     try:
-        events, user_data = get_schedule_events(chat_key)
+        events, user_data = await get_schedule_events(chat_key)
         schedule, _ = get_week_schedule(events)
         await update.message.reply_text(
             f"Расписание на неделю:\n{schedule}",
@@ -434,11 +446,12 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
+
 async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
-    
+
     try:
-        events, user_data = get_schedule_events(chat_key)
+        events, user_data = await get_schedule_events(chat_key)
         schedule, _ = get_next_week_schedule(events)
         await update.message.reply_text(
             f"Расписание на следующую неделю:\n{schedule}",
@@ -465,9 +478,10 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
+
 async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     chat_key = f"{chat_id}"
-    
+
     if len(context.args) < 1:
         try:
             await (update.message or update.callback_query.message).reply_text(
@@ -491,10 +505,10 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
             'username': update.effective_user.username or 'unknown'
         })
         return DAY_SELECTION
-    
+
     try:
         day = int(context.args[0])
-        events, user_data = get_schedule_events(chat_key)
+        events, user_data = await get_schedule_events(chat_key)
         schedule, _ = get_day_schedule(events, day)
         try:
             await (update.message or update.callback_query.message).reply_text(
@@ -550,22 +564,18 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
                 error_message,
                 reply_markup=get_schedule_keyboard(show_menu_button=True)
             )
-        except Exception as e:
+        except Exception:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=error_message,
                 reply_markup=get_schedule_keyboard(show_menu_button=True)
             )
-            logger.warning("failed to reply in day_command for error, sent new message: %s", str(e), extra={
-                'user_id': update.effective_user.id,
-                'chat_id': chat_id,
-                'username': update.effective_user.username or 'unknown'
-            })
         logger.error("failed to fetch day schedule: %s", str(e), extra={
             'user_id': update.effective_user.id,
             'chat_id': chat_id,
             'username': update.effective_user.username or 'unknown'
         })
+
 
 async def send_message(query, context, text, reply_markup=None):
     try:
@@ -582,10 +592,11 @@ async def send_message(query, context, text, reply_markup=None):
             reply_markup=reply_markup
         )
 
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     try:
         if query.message:
             await query.message.delete()
@@ -615,7 +626,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
         return
-    
+
     # Handle student/teacher selection callbacks
     if query.data == "change_student":
         await change_student_start(update, context)
@@ -626,12 +637,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("teacher_select_"):
         await teacher_select_receive(update, context)
         return
-    
+
     chat_key = f"{update.effective_chat.id}"
-    
+
     try:
-        events, user_data = get_schedule_events(chat_key)
-        
+        events, user_data = await get_schedule_events(chat_key)
+
         if query.data == "today":
             schedule, _ = get_today_schedule(events)
             user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
@@ -706,7 +717,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
 
-# Change group/teacher handlers
+
 async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
@@ -720,7 +731,7 @@ async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-    
+
     await (update.message or query.message).reply_text(
         "Выберите тип: студент или преподаватель?",
         reply_markup=get_change_group_keyboard()
@@ -732,14 +743,15 @@ async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
     return CHANGE_GROUP_WAITING
 
+
 async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle student group name input"""
     group_name = update.message.text.strip()
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    
+
     try:
-        student_id = get_schedule(group_name)
+        student_id = await get_schedule(group_name)
         if not student_id:
             await update.message.reply_text(
                 f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
@@ -751,7 +763,7 @@ async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
             return ConversationHandler.END
-        
+
         users_data[chat_key] = users_data.get(chat_key, {})
         users_data[chat_key]["id_student"] = student_id
         users_data[chat_key]["group_name"] = group_name
@@ -783,10 +795,10 @@ async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             error_message,
             reply_markup=get_menu_keyboard()
         )
-    
+
     return ConversationHandler.END
 
-# Teacher selection handlers
+
 async def change_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle 'Я студент' button - asks for group name"""
     query = update.callback_query
@@ -801,7 +813,7 @@ async def change_student_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-    
+
     await (update.message or query.message).reply_text(
         "Пожалуйста, введите название группы (например, ПИ-23)."
     )
@@ -810,7 +822,8 @@ async def change_student_start(update: Update, context: ContextTypes.DEFAULT_TYP
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
     })
-    return STUDENT_GROUP_WAITING  # Return different state for student
+    return STUDENT_GROUP_WAITING
+
 
 async def change_teacher_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle 'Я преподаватель' button - asks for teacher name"""
@@ -826,7 +839,7 @@ async def change_teacher_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-    
+
     await (update.message or query.message).reply_text(
         "Введите имя преподавателя (например, Иван или Петров А.С.):"
     )
@@ -837,15 +850,16 @@ async def change_teacher_start(update: Update, context: ContextTypes.DEFAULT_TYP
     })
     return TEACHER_SELECT_WAITING
 
+
 async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle teacher name input and search for teachers"""
     teacher_name = update.message.text.strip()
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
-    
+
     try:
-        teachers = find_teacher(teacher_name)
-        
+        teachers = await find_teacher(teacher_name)
+
         if not teachers:
             await update.message.reply_text(
                 f"Преподаватель '{teacher_name}' не найден. Попробуйте ввести другое имя или часть имени.",
@@ -857,13 +871,13 @@ async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_T
                 'username': update.effective_user.username or 'unknown'
             })
             return ConversationHandler.END
-        
+
         if len(teachers) > 1:
             keyboard = []
             for teacher in teachers[:10]:
                 keyboard.append([InlineKeyboardButton(teacher['name'], callback_data=f"teacher_select_{teacher['id']}")])
             keyboard.append([InlineKeyboardButton("Отмена", callback_data="menu")])
-            
+
             await update.message.reply_text(
                 f"Найдено несколько преподавателей. Выберите нужного:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -874,11 +888,11 @@ async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_T
                 'username': update.effective_user.username or 'unknown'
             })
             return TEACHER_SELECT_WAITING
-        
+
         teacher = teachers[0]
         teacher_id = teacher['id']
         teacher_name_full = teacher['name']
-        
+
         users_data[chat_key] = users_data.get(chat_key, {})
         users_data[chat_key]["id_teacher"] = teacher_id
         users_data[chat_key]["teacher_name"] = teacher_name_full
@@ -887,7 +901,7 @@ async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_T
         if "group_name" in users_data[chat_key]:
             del users_data[chat_key]["group_name"]
         save_users(users_data)
-        
+
         await update.message.reply_text(
             f"Выбран преподаватель: {teacher_name_full} (ID: {teacher_id})",
             reply_markup=get_menu_keyboard()
@@ -897,7 +911,7 @@ async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_T
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-        
+
     except Exception as e:
         error_message = "Произошла ошибка при поиске преподавателя. Пожалуйста, попробуйте еще раз."
         if "504" in str(e):
@@ -911,26 +925,28 @@ async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_T
             error_message,
             reply_markup=get_menu_keyboard()
         )
-    
+
     return ConversationHandler.END
+
 
 async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle teacher selection from list when multiple matches found"""
     query = update.callback_query
     await query.answer()
-    
+
     if query.data.startswith("teacher_select_"):
         teacher_id = int(query.data.split("_")[-1])
         chat_key = f"{update.effective_chat.id}"
         users_data = load_users()
-        
-        teachers = find_teacher("")
+
+        # Fetch all teachers and find the selected one by id
+        teachers = await find_teacher("")
         teacher_name = ""
         for t in teachers:
             if t['id'] == teacher_id:
                 teacher_name = t['name']
                 break
-        
+
         users_data[chat_key] = users_data.get(chat_key, {})
         users_data[chat_key]["id_teacher"] = teacher_id
         users_data[chat_key]["teacher_name"] = teacher_name
@@ -939,7 +955,7 @@ async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_T
         if "group_name" in users_data[chat_key]:
             del users_data[chat_key]["group_name"]
         save_users(users_data)
-        
+
         try:
             await query.message.edit_text(
                 f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
@@ -951,16 +967,17 @@ async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_T
                 text=f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
                 reply_markup=get_menu_keyboard()
             )
-        
+
         logger.info("selected teacher from list: %s (ID: %s)", teacher_name, teacher_id, extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
-        
+
         return ConversationHandler.END
-    
+
     return TEACHER_SELECT_WAITING
+
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -969,7 +986,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not (text.startswith(bot_username) or (update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id)):
             return
         text = text.replace(bot_username, '').strip()
-    
+
     if text in ["Расп. на сегодня", "Расписание на сегодня"]:
         await today_command(update, context)
     elif text in ["Расп. на завтра", "Расписание на завтра"]:
@@ -1009,6 +1026,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'username': update.effective_user.username or 'unknown'
     })
 
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
     error_str = str(context.error) if context.error else "None"
@@ -1018,13 +1036,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
     elif "Message to be replied not found" in error_str:
         error_message = "Сообщение для ответа не найдено. Пожалуйста, попробуйте снова."
-    
+
     logger.error("error occurred: %s\n%s", error_str, traceback.format_exc(), extra={
         'user_id': update.effective_user.id if update else 'unknown',
         'chat_id': update.effective_chat.id if update else 'unknown',
         'username': update.effective_user.username or 'unknown' if update else 'unknown'
     })
-    
+
     if update and (update.message or update.callback_query):
         try:
             await (update.message or update.callback_query.message).reply_text(

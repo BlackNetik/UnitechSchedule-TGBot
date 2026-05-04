@@ -7,6 +7,7 @@ import os
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 )
+from telegram.request import HTTPXRequest
 
 from config import FEEDBACK_WAITING, DAY_SELECTION, CHANGE_GROUP_WAITING, TEACHER_SELECT_WAITING, STUDENT_GROUP_WAITING
 from src.logging_setup import setup_logging
@@ -15,7 +16,7 @@ from src.handlers import (
     start, info, change_command, feedback_start, feedback_receive, feedback_cancel,
     today_command, tomorrow_command, week_command, next_week_command, day_command,
     day_selection_start, day_selection, day_selection_text, handle_callback, text_handler, error_handler,
-    change_start, change_receive, change_student_start, change_teacher_start, 
+    change_start, change_receive, change_student_start, change_teacher_start,
     change_teacher_receive, teacher_select_receive
 )
 
@@ -33,8 +34,18 @@ TELEGRAM_TOKEN = load_api_key()
 
 if __name__ == '__main__':
     logger.info("bot started", extra={'user_id': 'system', 'chat_id': 'system', 'username': 'unknown'})
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
+
+    # Увеличиваем пул соединений и таймауты, чтобы избежать PoolTimeout
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        pool_timeout=30.0,
+        connect_timeout=15.0,
+        read_timeout=15.0,
+        write_timeout=15.0,
+    )
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("change", change_command))
@@ -66,7 +77,7 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler("cancel", feedback_cancel)],
         per_message=False
     ))
-    # Separate handler for student group change
+    # Отдельный обработчик для смены группы студента
     app.add_handler(ConversationHandler(
         entry_points=[
             CallbackQueryHandler(change_student_start, pattern="^change_student$")
@@ -80,7 +91,7 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler("cancel", feedback_cancel)],
         per_message=False
     ))
-    # Separate handler for teacher selection
+    # Отдельный обработчик для выбора преподавателя
     app.add_handler(ConversationHandler(
         entry_points=[
             CallbackQueryHandler(change_teacher_start, pattern="^change_teacher$")
@@ -95,7 +106,7 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler("cancel", feedback_cancel)],
         per_message=False
     ))
-    # Original handler for showing the student/teacher selection menu
+    # Обработчик показа меню выбора студент/преподаватель
     app.add_handler(ConversationHandler(
         entry_points=[
             CallbackQueryHandler(change_start, pattern="^change$")
@@ -116,5 +127,9 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
-    
-    app.run_polling(timeout=20, drop_pending_updates=True)
+
+    app.run_polling(
+        timeout=30,
+        drop_pending_updates=True,
+        pool_timeout=30.0,
+    )
