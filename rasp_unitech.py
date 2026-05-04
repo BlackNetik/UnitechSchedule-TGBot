@@ -32,6 +32,17 @@ except locale.Error:
 logger = setup_logging()
 TELEGRAM_TOKEN = load_api_key()
 
+
+async def post_init(application):
+    """Кэшируем username бота один раз при старте, чтобы не делать get_me() на каждое сообщение."""
+    bot_info = await application.bot.get_me()
+    application.bot_data['username'] = bot_info.username
+    logger.info(
+        "bot username cached: @%s", bot_info.username,
+        extra={'user_id': 'system', 'chat_id': 'system', 'username': bot_info.username}
+    )
+
+
 if __name__ == '__main__':
     logger.info("bot started", extra={'user_id': 'system', 'chat_id': 'system', 'username': 'unknown'})
 
@@ -44,7 +55,7 @@ if __name__ == '__main__':
         write_timeout=15.0,
     )
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))

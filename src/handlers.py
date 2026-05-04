@@ -982,10 +982,21 @@ async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_T
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if update.effective_chat.type in ['group', 'supergroup']:
-        bot_username = (await context.bot.get_me()).username
-        if not (text.startswith(bot_username) or (update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id)):
+        # Берём username из кэша (заполняется в post_init при старте).
+        # Никаких сетевых запросов get_me() здесь — иначе таймаут на каждом чужом сообщении
+        # летит в error_handler, который пытается ответить в чат → бот спамит ошибками.
+        bot_username = context.bot_data.get('username') or context.bot.username or ''
+        mention = '@' + bot_username
+        # Безопасная проверка reply — from_user может быть None (анонимный админ, пост из канала)
+        reply_msg = update.message.reply_to_message
+        reply_is_bot = (
+            reply_msg is not None
+            and reply_msg.from_user is not None
+            and reply_msg.from_user.id == context.bot.id
+        )
+        if not (mention in text or reply_is_bot):
             return
-        text = text.replace(bot_username, '').strip()
+        text = text.replace(mention, '').strip()
 
     if text in ["Расп. на сегодня", "Расписание на сегодня"]:
         await today_command(update, context)
@@ -1028,20 +1039,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
     error_str = str(context.error) if context.error else "None"
-    if "504" in error_str:
-        error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-    elif "Read timeout" in error_str:
-        error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
-    elif "Message to be replied not found" in error_str:
-        error_message = "Сообщение для ответа не найдено. Пожалуйста, попробуйте снова."
 
     logger.error("error occurred: %s\n%s", error_str, traceback.format_exc(), extra={
         'user_id': update.effective_user.id if update else 'unknown',
         'chat_id': update.effective_chat.id if update else 'unknown',
         'username': update.effective_user.username or 'unknown' if update else 'unknown'
     })
+
+    # Сетевые таймауты (Timed out, TimedOut) — это проблема соединения, а не действия пользователя.
+    # Не пытаемся отправить сообщение об ошибке: сеть и так недоступна, и бот только заспамит чат.
+    if "Timed out" in error_str or "TimedOut" in error_str:
+        return
+
+    error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
+    if "504" in error_str:
+        error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+    elif "Read timeout" in error_str:
+        error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+    elif "Message to be replied not found" in error_str:
+        error_message = "Сообщение для ответа не найдено. Пожалуйста, попробуйте снова."
 
     if update and (update.message or update.callback_query):
         try:
@@ -1055,8 +1072,3 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=error_message,
-                reply_markup=get_schedule_keyboard(show_menu_button=True)
-            )
