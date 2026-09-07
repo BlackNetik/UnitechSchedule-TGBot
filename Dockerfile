@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p Logs
+RUN mkdir -p Logs && chmod +x /app/docker-entrypoint.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -26,4 +26,5 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 # Run the bot
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["python", "rasp_unitech.py"]

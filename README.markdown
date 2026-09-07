@@ -133,6 +133,10 @@ TELEGRAM_API_KEY=ваш_токен_от_BotFather
 docker-compose up -d
 ```
 
+При запуске Compose передаёт `TELEGRAM_API_KEY` в контейнер и создаёт из него
+файл `/app/api_key_journal_unitech.txt`, который читает бот. Если переменная не
+задана, Compose завершится с понятной ошибкой до запуска контейнера.
+
 ### Управление контейнером
 
 * **Остановить:** `docker stop unitech-bot`
