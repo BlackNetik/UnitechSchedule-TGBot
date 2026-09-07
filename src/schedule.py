@@ -1,204 +1,120 @@
 # schedule.py
 
-import httpx
-from icalendar import Calendar
 from datetime import datetime, timedelta
 import calendar
 
 from src.utils import MSK, logger
+from src.study_portal import get_week_lessons, week_range_for, compute_week_type
 
 
 class ScheduleFormatter:
     @staticmethod
-    def get_pair_number(start_time):
-        pairs = {
-            1: ("09:00", "10:30"),
-            2: ("10:40", "12:10"),
-            3: ("12:30", "14:00"),
-            4: ("14:10", "15:40"),
-            5: ("15:50", "17:20"),
-            6: ("17:25", "18:55"),
-            7: ("19:10", "20:30")
-        }
-        start_time_str = start_time.strftime('%H:%M')
-        for pair_number, (start, end) in pairs.items():
-            if start_time_str == start:
-                return pair_number
-        return None
+    def categorize(lesson):
+        subject_l = (lesson.get("subject") or "").lower()
+        kind_l = (lesson.get("kind") or "").lower()
+
+        if 'физ' in subject_l or 'элективные курсы по физической культуре' in subject_l:
+            return '💪', 'Физкультура'
+        if subject_l.startswith('зач') or 'зачет' in kind_l or 'зачёт' in kind_l:
+            return '✏️', 'Зачет'
+        if subject_l.startswith('экзамен') or 'экзамен' in kind_l:
+            return '🎓', 'Экзамен'
+        if 'лекц' in kind_l:
+            return '📚', 'Лекция'
+        if 'практ' in kind_l:
+            return '💻', 'Практика'
+        if 'лаборат' in kind_l:
+            return '❗', 'Лабораторная'
+        if 'консультац' in kind_l:
+            return '🗣️', 'Консультация'
+        return '🔔', 'Прочее'
 
     @staticmethod
-    def format_event(event):
-        category = 'Прочее'
+    def format_lesson(lesson):
         try:
-            start_time = event['dtstart'].astimezone(MSK)
-            end_time = event['dtend'].astimezone(MSK)
-            start_time_str = start_time.strftime('%H:%M')
-            end_time_str = end_time.strftime('%H:%M')
-            summary = event['summary']
-            location = event['location']
-            description = event['description']
-
-            summary_lower = summary.lower()
-            if 'зач' in summary_lower.split()[0]:
-                emoji = '✏️'
-                category = 'Зачет'
-                summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'физ' in summary_lower or 'элективные курсы по физической культуре' in summary_lower:
-                emoji = '💪'
-                category = 'Физкультура'
-                summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'лек' in summary_lower.split()[0] or 'лек.' in summary_lower.split()[0]:
-                emoji = '📚'
-                category = 'Лекция'
-                summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'пр' in summary_lower.split()[0] or 'пр.' in summary_lower.split()[0] or 'прак' in summary_lower.split()[0]:
-                emoji = '💻'
-                category = 'Практика'
-                summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            elif 'лаб' in summary_lower.split()[0]:
-                emoji = '❗'
-                category = 'Лабораторная'
-                summary = ' '.join(summary.split()[1:]) if len(summary.split()) > 1 else summary
-            else:
-                emoji = '🔔'
-                category = 'Прочее'
-
-            summary = f"{summary} ({category})"
-            pair_number = ScheduleFormatter.get_pair_number(start_time)
-            time_prefix = f"{pair_number} пара: " if pair_number else ""
-            return f" 🕘 {time_prefix}{start_time_str}-{end_time_str}\n{emoji} {summary}\nАудитория: {location}\n{description}\n"
+            emoji, category = ScheduleFormatter.categorize(lesson)
+            time_prefix = f"{lesson['num']} пара: " if lesson.get('num') else ""
+            room = lesson.get('room') or '?'
+            building = f", {lesson['building']}" if lesson.get('building') else ""
+            teacher = lesson.get('teacher') or 'не указан'
+            return (
+                f" 🕘 {time_prefix}{lesson['start']}-{lesson['end']}\n"
+                f"{emoji} {lesson['subject']} ({category})\n"
+                f"Преподаватель: {teacher}\n"
+                f"Аудитория: {room}{building}\n"
+            )
         except Exception as e:
-            logger.error("failed to format event: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-            return f"🔔 Error formatting event: {event.get('summary', '?')} ({category})\n"
+            logger.error("failed to format lesson: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
+            return f"🔔 Ошибка отображения занятия: {lesson.get('subject', '?')}\n"
 
     @staticmethod
-    def format_daily_schedule(events, date):
-        events = [event for event in events if event['dtstart'].astimezone(MSK).date() == date]
+    def format_daily_schedule(days, date):
+        lessons = days.get(date, [])
         day = str(date.day)
         formatted_date = f"{day} {date.strftime('%B (%A)')}"
-        if not events:
+        if not lessons:
             return f"{formatted_date} занятий нет 0_о"
-        sorted_events = sorted(events, key=lambda e: e['dtstart'])
-        return "\n".join(ScheduleFormatter.format_event(event) for event in sorted_events)
+        return "\n".join(ScheduleFormatter.format_lesson(lesson) for lesson in lessons)
 
     @staticmethod
-    def format_week_schedule(events, start_date=None, end_date=None):
-        if start_date and end_date:
-            events = [event for event in events if start_date <= event['dtstart'].astimezone(MSK).date() <= end_date]
-        if not events:
-            return "Расписания на неделю нет."
-        sorted_events = sorted(events, key=lambda e: e['dtstart'])
-        current_date = start_date
+    def format_week_schedule(days, start_date, end_date):
         schedule = []
+        current_date = start_date
+        any_lessons = False
         while current_date <= end_date:
-            day_events = [event for event in sorted_events if event['dtstart'].astimezone(MSK).date() == current_date]
-            if current_date.weekday() >= 5 and not day_events:
+            lessons = days.get(current_date, [])
+            if lessons:
+                any_lessons = True
+            if current_date.weekday() >= 5 and not lessons:
                 current_date += timedelta(days=1)
                 continue
             day = str(current_date.day)
             formatted_date = f"{day} {current_date.strftime('%B (%A)')}"
             schedule.append(f"<----------!---------->\n📅 {formatted_date}")
-            if day_events:
-                schedule.append("\n".join(ScheduleFormatter.format_event(event) for event in day_events))
-            elif current_date.weekday() < 5:
+            if lessons:
+                schedule.append("\n".join(ScheduleFormatter.format_lesson(lesson) for lesson in lessons))
+            else:
                 schedule.append(f"{formatted_date} занятий нет 0_о")
             current_date += timedelta(days=1)
+        if not any_lessons:
+            return "Расписания на неделю нет."
         return "\n".join(schedule)
 
 
-async def download_ics(id_student):
-    url = f"https://es.unitech-mo.ru/api/Rasp?idStudent={id_student}&iCal=true"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            if not response.content:
-                raise Exception("Empty response from server")
-            return response.content
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 504:
-            logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-            raise Exception("504 Server Error: Gateway Time-out")
-        raise Exception(f"Failed to download ICS file: {str(e)}")
-    except httpx.TimeoutException as e:
-        logger.error("failed to download ICS file (timeout): %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-        raise Exception("Read timeout error: Failed to connect to server")
-    except httpx.RequestError as e:
-        logger.error("failed to download ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-        raise Exception(f"Failed to download ICS file: {str(e)}")
-
-
-async def download_teacher_ics(teacher_id):
-    url = f"https://es.unitech-mo.ru/api/Rasp?idTeacher={teacher_id}&iCal=true"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            if not response.content:
-                raise Exception("Empty response from server")
-            return response.content
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 504:
-            logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-            raise Exception("504 Server Error: Gateway Time-out")
-        raise Exception(f"Failed to download teacher ICS file: {str(e)}")
-    except httpx.TimeoutException as e:
-        logger.error("failed to download teacher ICS file (timeout): %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-        raise Exception("Read timeout error: Failed to connect to server")
-    except httpx.RequestError as e:
-        logger.error("failed to download teacher ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-        raise Exception(f"Failed to download teacher ICS file: {str(e)}")
-
-
-def parse_ics(ics_content):
-    try:
-        cal = Calendar.from_ical(ics_content)
-        events = []
-        for component in cal.walk():
-            if component.name == "VEVENT":
-                event = {
-                    'summary': component.get('summary', 'No summary'),
-                    'dtstart': component.get('dtstart').dt if component.get('dtstart') else None,
-                    'dtend': component.get('dtend').dt if component.get('dtend') else None,
-                    'location': component.get('location', 'No location'),
-                    'description': component.get('description', 'No description'),
-                }
-                if event['dtstart'] is None or event['dtend'] is None:
-                    continue
-                events.append(event)
-        return events
-    except Exception as e:
-        logger.error("failed to parse ICS file: %s", str(e), extra={'user_id': 'unknown', 'chat_id': 'unknown', 'username': 'unknown'})
-        raise Exception(f"Failed to parse ICS file: {str(e)}")
-
-
-def get_today_schedule(events):
+async def get_today_schedule(group_id):
     today = datetime.now(MSK).date()
-    return ScheduleFormatter.format_daily_schedule(events, today), today
+    monday, _ = week_range_for(today)
+    days = await get_week_lessons(group_id, monday)
+    return ScheduleFormatter.format_daily_schedule(days, today), today
 
 
-def get_tomorrow_schedule(events):
+async def get_tomorrow_schedule(group_id):
     tomorrow = datetime.now(MSK).date() + timedelta(days=1)
-    return ScheduleFormatter.format_daily_schedule(events, tomorrow), tomorrow
+    monday, _ = week_range_for(tomorrow)
+    days = await get_week_lessons(group_id, monday)
+    return ScheduleFormatter.format_daily_schedule(days, tomorrow), tomorrow
 
 
-def get_week_schedule(events):
+async def get_week_schedule(group_id):
     today = datetime.now(MSK).date()
-    days_since_monday = today.weekday()
-    start_date = today - timedelta(days=days_since_monday)
-    end_date = start_date + timedelta(days=6)
-    return ScheduleFormatter.format_week_schedule(events, start_date, end_date), None
+    monday, sunday = week_range_for(today)
+    days = await get_week_lessons(group_id, monday)
+    week_type = compute_week_type(monday).capitalize()
+    schedule = ScheduleFormatter.format_week_schedule(days, monday, sunday)
+    return f"{week_type} неделя\n{schedule}", None
 
 
-def get_next_week_schedule(events):
+async def get_next_week_schedule(group_id):
     today = datetime.now(MSK).date()
-    days_until_monday = (7 - today.weekday()) % 7 or 7
-    start_date = today + timedelta(days=days_until_monday)
-    end_date = start_date + timedelta(days=6)
-    return ScheduleFormatter.format_week_schedule(events, start_date, end_date), None
+    monday, sunday = week_range_for(today)
+    next_monday, next_sunday = monday + timedelta(days=7), sunday + timedelta(days=7)
+    days = await get_week_lessons(group_id, next_monday)
+    week_type = compute_week_type(next_monday).capitalize()
+    schedule = ScheduleFormatter.format_week_schedule(days, next_monday, next_sunday)
+    return f"{week_type} неделя\n{schedule}", None
 
 
-def get_day_schedule(events, day):
+async def get_day_schedule(group_id, day):
     today = datetime.now(MSK)
     year, month = today.year, today.month
     _, max_days = calendar.monthrange(year, month)
@@ -206,6 +122,9 @@ def get_day_schedule(events, day):
         return f"Ошибка: день {day} недопустим. Укажите день от 1 до {max_days} (в {today.strftime('%B')} {max_days} дней).", None
     try:
         target_date = datetime(year, month, day).date()
-        return ScheduleFormatter.format_daily_schedule(events, target_date), target_date
     except ValueError:
         return f"Ошибка: день {day} недопустим для текущего месяца.", None
+
+    monday, _ = week_range_for(target_date)
+    days = await get_week_lessons(group_id, monday)
+    return ScheduleFormatter.format_daily_schedule(days, target_date), target_date

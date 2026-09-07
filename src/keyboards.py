@@ -48,15 +48,6 @@ def get_schedule_keyboard(exclude=None, show_menu_button=True):
     
     return InlineKeyboardMarkup(keyboard)
 
-def get_change_group_keyboard():
-    """
-    Keyboard for choosing between student group or teacher mode.
-    """
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Я студент", callback_data="change_student")],
-        [InlineKeyboardButton("Я преподаватель", callback_data="change_teacher")]
-    ])
-
 def get_day_selection_keyboard(page=0):
     today = datetime.now(MSK)
     year, month = today.year, today.month

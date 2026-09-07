@@ -4,16 +4,15 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from datetime import datetime
 import traceback
 
-from config import BOT_VERSION, LAST_UPDATED, FEEDBACK_WAITING, DAY_SELECTION, TEACHER_SELECT_WAITING, STUDENT_GROUP_WAITING
+from config import BOT_VERSION, LAST_UPDATED, FEEDBACK_WAITING, DAY_SELECTION, DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME
 from src.utils import load_users, save_users, MSK, logger
-from src.keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_selection_keyboard, get_change_group_keyboard
-from src.schedule import download_ics, download_teacher_ics, parse_ics, get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
-from src.get_student_id import get_schedule, find_teacher
+from src.keyboards import get_menu_keyboard, get_schedule_keyboard, get_day_selection_keyboard
+from src.schedule import get_today_schedule, get_tomorrow_schedule, get_week_schedule, get_next_week_schedule, get_day_schedule
+from src.study_portal import resolve_group_id
 
 from config import CHANGE_GROUP_WAITING, DEVELOPER_CHAT_ID, DEVELOPER_USERNAME
 
@@ -22,11 +21,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
     users_data = load_users()
     if chat_key not in users_data:
-        users_data[chat_key] = {'id_student': 90893}
+        users_data[chat_key] = {'group_id': DEFAULT_GROUP_ID, 'group_name': DEFAULT_GROUP_NAME}
         save_users(users_data)
     await update.message.reply_text(
-        'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий Технологического Университета им. А.А. Леонова с портала Unitech!\n'
-        'По умолчанию показываю расписание для группы ПИ-23. Хочешь другую? Используй /change <название группы> (например, /change ПИ-23).\n'
+        'Привет! 👋 Я бот, который поможет тебе узнать расписание занятий Технологического Университета им. А.А. Леонова с портала МИИГАиК!\n'
+        f'По умолчанию показываю расписание для группы {DEFAULT_GROUP_NAME}. Хочешь другую? Используй /change <название группы> (например, /change {DEFAULT_GROUP_NAME}).\n'
         'Выбирай опции через кнопки или команды: /today, /tomorrow, /week, /next_week, /day, /info, /feedback.',
         reply_markup=get_menu_keyboard()
     )
@@ -39,8 +38,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"Этот бот предоставляет расписание занятий на основе данных с портала Unitech.\n"
-        f"Бот был написан сотрудником МОРС с помощью AI Grok\n"
+        f"Этот бот предоставляет расписание занятий на основе данных с портала МИИГАиК (study.miigaik.ru).\n"
+        f"Бот был написан сотрудником МОРС с помощью AI\n"
         f"Расписание доступно для всех групп, используйте /change <название группы> для смены.\n"
         f"Дата создания: 01.09.2025. Текущая версия: {BOT_VERSION} от {LAST_UPDATED}\n"
         f"\nИспользуйте команды:\n"
@@ -49,7 +48,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/week — расписание на неделю\n"
         f"/next_week — расписание на следующую неделю\n"
         f"/day <номер_дня> — расписание на указанный день текущего месяца\n"
-        f"/change — смена расписания\n"
+        f"/change — смена группы\n"
         f"/feedback — отправить обратную связь разработчику",
         reply_markup=get_menu_keyboard()
     )
@@ -60,12 +59,49 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 
-async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_key = f"{update.effective_chat.id}"
+def _error_message(e: Exception) -> str:
+    error_str = str(e)
+    if "504" in error_str:
+        return "Портал МИИГАиК временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
+    if "Read timeout" in error_str:
+        return "Не удалось подключиться к порталу МИИГАиК из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+    return "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
+
+
+async def get_user_group(chat_key):
+    """
+    Возвращает (group_id, group_name, user_data) для чата.
+
+    Заодно самостоятельно "мигрирует" записи, оставшиеся от старой версии
+    бота (там, где группа определялась через id_student на es.unitech-mo.ru):
+    если group_id ещё не сохранён, группа переопределяется на новом портале
+    по названию (group_name, если оно было сохранено, иначе группа по
+    умолчанию), и результат сохраняется — так что лишний запрос к порталу
+    происходит максимум один раз на пользователя.
+    """
     users_data = load_users()
+    user_data = users_data.get(chat_key, {})
+
+    if 'group_id' in user_data and 'group_name' in user_data:
+        return user_data['group_id'], user_data['group_name'], user_data
+
+    group_name = user_data.get('group_name') or DEFAULT_GROUP_NAME
+    group = await resolve_group_id(group_name)
+    if group is None:
+        group_id, group_name = DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME
+    else:
+        group_id, group_name = group['id'], group['name']
+
+    user_data = {'group_id': group_id, 'group_name': group_name}
+    users_data[chat_key] = user_data
+    save_users(users_data)
+    return group_id, group_name, user_data
+
+
+async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text(
-            "Использование: /change <название группы> (например, /change ПИ-23)"
+            f"Использование: /change <название группы> (например, /change {DEFAULT_GROUP_NAME})"
         )
         logger.info("invalid /change command: no group name provided", extra={
             'user_id': update.effective_user.id,
@@ -74,44 +110,45 @@ async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
 
-    group_name = ' '.join(context.args)
+    await _apply_group_change(update, context, ' '.join(context.args))
+
+
+async def _apply_group_change(update: Update, context: ContextTypes.DEFAULT_TYPE, group_name: str):
+    chat_key = f"{update.effective_chat.id}"
+    users_data = load_users()
+
     try:
-        student_id = await get_schedule(group_name)
-        if not student_id:
+        group = await resolve_group_id(group_name)
+        if not group:
             await update.message.reply_text(
-                f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
+                f"Не удалось найти группу '{group_name}'. Проверьте название и попробуйте снова.",
                 reply_markup=get_menu_keyboard()
             )
-            logger.info("failed to find group or student for group: %s", group_name, extra={
+            logger.info("failed to find group: %s", group_name, extra={
                 'user_id': update.effective_user.id,
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
             return
     except Exception as e:
-        error_message = "Произошла ошибка при поиске группы. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        logger.info("failed to find group or student for group %s: %s", group_name, str(e), extra={
+        logger.info("failed to look up group %s: %s", group_name, str(e), extra={
             'user_id': update.effective_user.id,
             'chat_id': update.effective_chat.id,
             'username': update.effective_user.username or 'unknown'
         })
         await update.message.reply_text(
-            error_message,
+            _error_message(e),
             reply_markup=get_menu_keyboard()
         )
         return
 
-    users_data[chat_key] = users_data.get(chat_key, {})
-    users_data[chat_key]["id_student"] = student_id
-    users_data[chat_key]["group_name"] = group_name
+    users_data[chat_key] = {'group_id': group['id'], 'group_name': group['name']}
     save_users(users_data)
     await update.message.reply_text(
-        f"Группа изменена на {group_name} (ID студента: {student_id})",
+        f"Группа изменена на {group['name']}",
         reply_markup=get_menu_keyboard()
     )
-    logger.info("changed group to %s (student ID: %s)", group_name, student_id, extra={
+    logger.info("changed group to %s (id: %s)", group['name'], group['id'], extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
@@ -331,32 +368,15 @@ async def day_selection_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return DAY_SELECTION
 
 
-async def get_schedule_events(chat_key):
-    """Helper function to get events based on user type (student or teacher)"""
-    users_data = load_users()
-    user_data = users_data.get(chat_key, {})
-
-    if "id_teacher" in user_data:
-        teacher_id = user_data["id_teacher"]
-        ics_content = await download_teacher_ics(teacher_id)
-    else:
-        student_id = user_data.get('id_student', 90893)
-        ics_content = await download_ics(student_id)
-
-    events = parse_ics(ics_content)
-    return events, user_data
-
-
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
 
     try:
-        events, user_data = await get_schedule_events(chat_key)
-        schedule, _ = get_today_schedule(events)
+        group_id, _, _ = await get_user_group(chat_key)
+        schedule, _ = await get_today_schedule(group_id)
 
-        user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
         await update.message.reply_text(
-            f"Расписание для {user_type}:\n{schedule}",
+            f"Расписание на сегодня:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="today")
         )
         logger.info("sent today's schedule", extra={
@@ -365,13 +385,8 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            error_message,
+            _error_message(e),
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to fetch today's schedule: %s", str(e), extra={
@@ -385,12 +400,11 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
 
     try:
-        events, user_data = await get_schedule_events(chat_key)
-        schedule, _ = get_tomorrow_schedule(events)
+        group_id, _, _ = await get_user_group(chat_key)
+        schedule, _ = await get_tomorrow_schedule(group_id)
 
-        user_type = "преподавателя" if "id_teacher" in user_data else "завтра"
         await update.message.reply_text(
-            f"Расписание на {user_type}:\n{schedule}",
+            f"Расписание на завтра:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="tomorrow")
         )
         logger.info("sent tomorrow's schedule", extra={
@@ -399,13 +413,8 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            error_message,
+            _error_message(e),
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to fetch tomorrow's schedule: %s", str(e), extra={
@@ -419,8 +428,8 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
 
     try:
-        events, user_data = await get_schedule_events(chat_key)
-        schedule, _ = get_week_schedule(events)
+        group_id, _, _ = await get_user_group(chat_key)
+        schedule, _ = await get_week_schedule(group_id)
         await update.message.reply_text(
             f"Расписание на неделю:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="week")
@@ -431,13 +440,8 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            error_message,
+            _error_message(e),
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to fetch week's schedule: %s", str(e), extra={
@@ -451,8 +455,8 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_key = f"{update.effective_chat.id}"
 
     try:
-        events, user_data = await get_schedule_events(chat_key)
-        schedule, _ = get_next_week_schedule(events)
+        group_id, _, _ = await get_user_group(chat_key)
+        schedule, _ = await get_next_week_schedule(group_id)
         await update.message.reply_text(
             f"Расписание на следующую неделю:\n{schedule}",
             reply_markup=get_schedule_keyboard(exclude="next_week")
@@ -463,13 +467,8 @@ async def next_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await update.message.reply_text(
-            error_message,
+            _error_message(e),
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to fetch next week's schedule: %s", str(e), extra={
@@ -508,8 +507,8 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
 
     try:
         day = int(context.args[0])
-        events, user_data = await get_schedule_events(chat_key)
-        schedule, _ = get_day_schedule(events, day)
+        group_id, _, _ = await get_user_group(chat_key)
+        schedule, _ = await get_day_schedule(group_id, day)
         try:
             await (update.message or update.callback_query.message).reply_text(
                 f"Расписание на {day} число:\n{schedule}",
@@ -554,11 +553,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_i
             'username': update.effective_user.username or 'unknown'
         })
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
+        error_message = _error_message(e)
         try:
             await (update.message or update.callback_query.message).reply_text(
                 error_message,
@@ -627,28 +622,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
 
-    # Handle student/teacher selection callbacks
-    if query.data == "change_student":
-        await change_student_start(update, context)
-        return
-    elif query.data == "change_teacher":
-        await change_teacher_start(update, context)
-        return
-    elif query.data.startswith("teacher_select_"):
-        await teacher_select_receive(update, context)
-        return
-
     chat_key = f"{update.effective_chat.id}"
 
     try:
-        events, user_data = await get_schedule_events(chat_key)
+        group_id, _, _ = await get_user_group(chat_key)
 
         if query.data == "today":
-            schedule, _ = get_today_schedule(events)
-            user_type = "преподавателя" if "id_teacher" in user_data else "сегодня"
+            schedule, _ = await get_today_schedule(group_id)
             await send_message(
                 query, context,
-                f"Расписание для {user_type}:\n{schedule}",
+                f"Расписание на сегодня:\n{schedule}",
                 reply_markup=get_schedule_keyboard(exclude="today")
             )
             logger.info("sent today's schedule via callback", extra={
@@ -657,11 +640,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
         elif query.data == "tomorrow":
-            schedule, _ = get_tomorrow_schedule(events)
-            user_type = "преподавателя" if "id_teacher" in user_data else "завтра"
+            schedule, _ = await get_tomorrow_schedule(group_id)
             await send_message(
                 query, context,
-                f"Расписание на {user_type}:\n{schedule}",
+                f"Расписание на завтра:\n{schedule}",
                 reply_markup=get_schedule_keyboard(exclude="tomorrow")
             )
             logger.info("sent tomorrow's schedule via callback", extra={
@@ -670,7 +652,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
         elif query.data == "week":
-            schedule, _ = get_week_schedule(events)
+            schedule, _ = await get_week_schedule(group_id)
             await send_message(
                 query, context,
                 f"Расписание на неделю:\n{schedule}",
@@ -682,7 +664,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': update.effective_user.username or 'unknown'
             })
         elif query.data == "next_week":
-            schedule, _ = get_next_week_schedule(events)
+            schedule, _ = await get_next_week_schedule(group_id)
             await send_message(
                 query, context,
                 f"Расписание на следующую неделю:\n{schedule}",
@@ -693,22 +675,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'chat_id': update.effective_chat.id,
                 'username': update.effective_user.username or 'unknown'
             })
-        elif query.data == "change":
-            logger.info("change group button pressed", extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return
     except Exception as e:
-        error_message = "Произошла ошибка при загрузке расписания. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        elif "Read timeout" in str(e):
-            error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
         await send_message(
             query, context,
-            error_message,
+            _error_message(e),
             reply_markup=get_schedule_keyboard(show_menu_button=True)
         )
         logger.error("failed to process callback %s: %s", query.data, str(e), extra={
@@ -733,10 +703,9 @@ async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
 
     await (update.message or query.message).reply_text(
-        "Выберите тип: студент или преподаватель?",
-        reply_markup=get_change_group_keyboard()
+        f"Введите название группы (например, {DEFAULT_GROUP_NAME}):"
     )
-    logger.info("started group/teacher change", extra={
+    logger.info("started group change", extra={
         'user_id': update.effective_user.id,
         'chat_id': update.effective_chat.id,
         'username': update.effective_user.username or 'unknown'
@@ -745,238 +714,10 @@ async def change_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def change_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle student group name input"""
+    """Обрабатывает ввод названия группы после /change или кнопки "Изменить расп."."""
     group_name = update.message.text.strip()
-    chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-
-    try:
-        student_id = await get_schedule(group_name)
-        if not student_id:
-            await update.message.reply_text(
-                f"Не удалось найти группу '{group_name}' или студентов в ней. Проверьте название и попробуйте снова.",
-                reply_markup=get_menu_keyboard()
-            )
-            logger.info("failed to find group or student for group: %s", group_name, extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return ConversationHandler.END
-
-        users_data[chat_key] = users_data.get(chat_key, {})
-        users_data[chat_key]["id_student"] = student_id
-        users_data[chat_key]["group_name"] = group_name
-        # Clear teacher data when switching to student mode
-        if "id_teacher" in users_data[chat_key]:
-            del users_data[chat_key]["id_teacher"]
-        if "teacher_name" in users_data[chat_key]:
-            del users_data[chat_key]["teacher_name"]
-        save_users(users_data)
-        await update.message.reply_text(
-            f"Группа изменена на {group_name} (ID студента: {student_id})",
-            reply_markup=get_menu_keyboard()
-        )
-        logger.info("changed group to %s (student ID: %s)", group_name, student_id, extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-    except Exception as e:
-        error_message = "Произошла ошибка при поиске группы. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        logger.error("failed to change group %s: %s", group_name, str(e), extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-        await update.message.reply_text(
-            error_message,
-            reply_markup=get_menu_keyboard()
-        )
-
+    await _apply_group_change(update, context, group_name)
     return ConversationHandler.END
-
-
-async def change_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle 'Я студент' button - asks for group name"""
-    query = update.callback_query
-    if query:
-        await query.answer()
-        try:
-            if query.message:
-                await query.message.delete()
-        except Exception as e:
-            logger.warning("failed to delete message in change_student_start: %s", str(e), extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-
-    await (update.message or query.message).reply_text(
-        "Пожалуйста, введите название группы (например, ПИ-23)."
-    )
-    logger.info("started student group change", extra={
-        'user_id': update.effective_user.id,
-        'chat_id': update.effective_chat.id,
-        'username': update.effective_user.username or 'unknown'
-    })
-    return STUDENT_GROUP_WAITING
-
-
-async def change_teacher_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle 'Я преподаватель' button - asks for teacher name"""
-    query = update.callback_query
-    if query:
-        await query.answer()
-        try:
-            if query.message:
-                await query.message.delete()
-        except Exception as e:
-            logger.warning("failed to delete message in change_teacher_start: %s", str(e), extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-
-    await (update.message or query.message).reply_text(
-        "Введите имя преподавателя (например, Иван или Петров А.С.):"
-    )
-    logger.info("started teacher change, returning TEACHER_SELECT_WAITING=%s", TEACHER_SELECT_WAITING, extra={
-        'user_id': update.effective_user.id,
-        'chat_id': update.effective_chat.id,
-        'username': update.effective_user.username or 'unknown'
-    })
-    return TEACHER_SELECT_WAITING
-
-
-async def change_teacher_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle teacher name input and search for teachers"""
-    teacher_name = update.message.text.strip()
-    chat_key = f"{update.effective_chat.id}"
-    users_data = load_users()
-
-    try:
-        teachers = await find_teacher(teacher_name)
-
-        if not teachers:
-            await update.message.reply_text(
-                f"Преподаватель '{teacher_name}' не найден. Попробуйте ввести другое имя или часть имени.",
-                reply_markup=get_menu_keyboard()
-            )
-            logger.info("teacher not found: %s", teacher_name, extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return ConversationHandler.END
-
-        if len(teachers) > 1:
-            keyboard = []
-            for teacher in teachers[:10]:
-                keyboard.append([InlineKeyboardButton(teacher['name'], callback_data=f"teacher_select_{teacher['id']}")])
-            keyboard.append([InlineKeyboardButton("Отмена", callback_data="menu")])
-
-            await update.message.reply_text(
-                f"Найдено несколько преподавателей. Выберите нужного:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            logger.info("multiple teachers found for %s: %d matches", teacher_name, len(teachers), extra={
-                'user_id': update.effective_user.id,
-                'chat_id': update.effective_chat.id,
-                'username': update.effective_user.username or 'unknown'
-            })
-            return TEACHER_SELECT_WAITING
-
-        teacher = teachers[0]
-        teacher_id = teacher['id']
-        teacher_name_full = teacher['name']
-
-        users_data[chat_key] = users_data.get(chat_key, {})
-        users_data[chat_key]["id_teacher"] = teacher_id
-        users_data[chat_key]["teacher_name"] = teacher_name_full
-        if "id_student" in users_data[chat_key]:
-            del users_data[chat_key]["id_student"]
-        if "group_name" in users_data[chat_key]:
-            del users_data[chat_key]["group_name"]
-        save_users(users_data)
-
-        await update.message.reply_text(
-            f"Выбран преподаватель: {teacher_name_full} (ID: {teacher_id})",
-            reply_markup=get_menu_keyboard()
-        )
-        logger.info("changed teacher to %s (ID: %s)", teacher_name_full, teacher_id, extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-
-    except Exception as e:
-        error_message = "Произошла ошибка при поиске преподавателя. Пожалуйста, попробуйте еще раз."
-        if "504" in str(e):
-            error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-        logger.error("failed to find teacher %s: %s", teacher_name, str(e), extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-        await update.message.reply_text(
-            error_message,
-            reply_markup=get_menu_keyboard()
-        )
-
-    return ConversationHandler.END
-
-
-async def teacher_select_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle teacher selection from list when multiple matches found"""
-    query = update.callback_query
-    await query.answer()
-
-    if query.data.startswith("teacher_select_"):
-        teacher_id = int(query.data.split("_")[-1])
-        chat_key = f"{update.effective_chat.id}"
-        users_data = load_users()
-
-        # Fetch all teachers and find the selected one by id
-        teachers = await find_teacher("")
-        teacher_name = ""
-        for t in teachers:
-            if t['id'] == teacher_id:
-                teacher_name = t['name']
-                break
-
-        users_data[chat_key] = users_data.get(chat_key, {})
-        users_data[chat_key]["id_teacher"] = teacher_id
-        users_data[chat_key]["teacher_name"] = teacher_name
-        if "id_student" in users_data[chat_key]:
-            del users_data[chat_key]["id_student"]
-        if "group_name" in users_data[chat_key]:
-            del users_data[chat_key]["group_name"]
-        save_users(users_data)
-
-        try:
-            await query.message.edit_text(
-                f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
-                reply_markup=get_menu_keyboard()
-            )
-        except Exception:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"Выбран преподаватель: {teacher_name} (ID: {teacher_id})",
-                reply_markup=get_menu_keyboard()
-            )
-
-        logger.info("selected teacher from list: %s (ID: %s)", teacher_name, teacher_id, extra={
-            'user_id': update.effective_user.id,
-            'chat_id': update.effective_chat.id,
-            'username': update.effective_user.username or 'unknown'
-        })
-
-        return ConversationHandler.END
-
-    return TEACHER_SELECT_WAITING
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1052,13 +793,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "Timed out" in error_str or "TimedOut" in error_str:
         return
 
-    error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
-    if "504" in error_str:
-        error_message = "Сервер Unitech временно недоступен (ошибка 504). Пожалуйста, попробуйте снова через несколько минут."
-    elif "Read timeout" in error_str:
-        error_message = "Не удалось подключиться к серверу Unitech из-за таймаута. Проверьте интернет-соединение и попробуйте снова."
-    elif "Message to be replied not found" in error_str:
+    if "Message to be replied not found" in error_str:
         error_message = "Сообщение для ответа не найдено. Пожалуйста, попробуйте снова."
+    elif "504" in error_str or "Read timeout" in error_str:
+        error_message = _error_message(context.error)
+    else:
+        error_message = "Произошла неизвестная ошибка. Пожалуйста, попробуйте еще раз."
 
     if update and (update.message or update.callback_query):
         try:
