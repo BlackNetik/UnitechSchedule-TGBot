@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   bot:
     build: .
     restart: unless-stopped
     environment:
-      - TELEGRAM_API_KEY=${TELEGRAM_API_KEY}
+      TELEGRAM_API_KEY: ${TELEGRAM_API_KEY:?Set TELEGRAM_API_KEY in the .env file}
     volumes:
       - ./users.json:/app/users.json
       - ./Logs:/app/Logs
